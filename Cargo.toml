@@ -1,0 +1,17 @@
+[package]
+name = "dusk-hamt"
+version = "0.1.0"
+authors = ["Kristoffer Ström <kristoffer@dusk.network>"]
+edition = "2018"
+description = "HAMT datatructure for microkelvin"
+license = "MPL-2.0"
+repository = "https://github.com/dusk-network/dusk-hamt"
+keywords = ["merkle", "datastructure", "hamt"]
+
+[dependencies]
+microkelvin = { path = "../microkelvin" }
+canonical = "0.5"
+canonical_derive = "0.5"
+
+[dev-dependencies]
+canonical_host = "0.5"
