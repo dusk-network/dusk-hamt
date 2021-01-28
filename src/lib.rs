@@ -1,16 +1,19 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
+// Liycense, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
 //! Hamt
 use core::mem;
+use core::ops::Deref;
 
 use canonical::{Canon, Store};
 use canonical_derive::Canon;
 
-use microkelvin::{Annotated, Annotation, Child, ChildMut, Compound};
+use microkelvin::{
+    Annotated, Annotation, Branch, Child, ChildMut, Compound, Step,
+};
 
 #[derive(Clone, Canon, Debug)]
 enum Bucket<K, V, A, S>
@@ -21,7 +24,7 @@ where
     S: Store,
 {
     Empty,
-    Leaf(K, V),
+    Leaf((K, V)),
     Node(Annotated<Hamt<K, V, A, S>, S>),
 }
 
@@ -43,8 +46,11 @@ where
     type Leaf = (K, V);
     type Annotation = A;
 
-    fn child(&self, _ofs: usize) -> Child<Self, S> {
-        todo!()
+    fn child(&self, ofs: usize) -> Child<Self, S> {
+        match (ofs, &self.0) {
+            (0, [Bucket::Leaf(kv), ..]) => Child::Leaf(kv),
+            _ => Child::EndOfNode,
+        }
     }
 
     fn child_mut(&mut self, _ofs: usize) -> ChildMut<Self, S> {
@@ -131,12 +137,12 @@ where
 
         match bucket.take() {
             Bucket::Empty => {
-                *bucket = Bucket::Leaf(key, val);
+                *bucket = Bucket::Leaf((key, val));
                 Ok(None)
             }
-            Bucket::Leaf(old_key, old_val) => {
+            Bucket::Leaf((old_key, old_val)) => {
                 if key == old_key {
-                    *bucket = Bucket::Leaf(key, val);
+                    *bucket = Bucket::Leaf((key, val));
                     Ok(Some(old_val))
                 } else {
                     let mut new_node = Hamt::<_, _, A, S>::new();
@@ -154,6 +160,25 @@ where
                 *bucket = Bucket::Node(node);
                 result
             }
+        }
+    }
+
+    /// Collapse node into a leaf if singleton
+    fn collapse(&mut self) -> Option<(K, V)> {
+        match &mut self.0 {
+            [leaf @ Bucket::Leaf(..), Bucket::Empty, Bucket::Empty, Bucket::Empty]
+            | [Bucket::Empty, leaf @ Bucket::Leaf(..), Bucket::Empty, Bucket::Empty]
+            | [Bucket::Empty, Bucket::Empty, leaf @ Bucket::Leaf(..), Bucket::Empty]
+            | [Bucket::Empty, Bucket::Empty, Bucket::Empty, leaf @ Bucket::Leaf(..)] => {
+                if let Bucket::Leaf((key, val)) =
+                    mem::replace(leaf, Bucket::Empty)
+                {
+                    Some((key, val))
+                } else {
+                    unreachable!("Match above guarantees a `Bucket::Leaf`")
+                }
+            }
+            _ => None,
         }
     }
 
@@ -179,7 +204,7 @@ where
 
         match bucket.take() {
             Bucket::Empty => Ok(None),
-            Bucket::Leaf(old_key, old_val) => {
+            Bucket::Leaf((old_key, old_val)) => {
                 if *key == old_key {
                     Ok(Some(old_val))
                 } else {
@@ -187,13 +212,54 @@ where
                 }
             }
 
-            Bucket::Node(mut node) => {
-                let result = node.val_mut()?._remove(key, hash, depth + 1);
+            Bucket::Node(mut annotated) => {
+                let mut node = annotated.val_mut()?;
+                let result = node._remove(key, hash, depth + 1);
                 // since we moved the bucket with `take()`, we need to put it back.
-                *bucket = Bucket::Node(node);
+                if let Some((key, val)) = node.collapse() {
+                    *bucket = Bucket::Leaf((key, val));
+                } else {
+                    drop(node);
+                    *bucket = Bucket::Node(annotated);
+                }
                 result
             }
         }
+    }
+
+    #[cfg(test)]
+    fn correct_empty_state(&self) -> bool {
+        match self.0 {
+            [Bucket::Empty, Bucket::Empty, Bucket::Empty, Bucket::Empty] => {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn get(&self, key: &K) -> Result<Option<impl Deref<Target = V>>, S::Error>
+    where
+        A: Annotation<Self, S>,
+    {
+        let hash = S::ident(key);
+        let mut depth = 0;
+
+        let branch = Branch::walk(self, |node| {
+            let _slot = slot(&hash, depth);
+            depth += 1;
+            Step::Abort
+        });
+        Ok(Some(ValRef::<K, V, A, S>(None)))
+    }
+}
+
+struct ValRef<K, V, A, S>(Option<(K, V, A, S)>);
+
+impl<K, V, A, S> Deref for ValRef<K, V, A, S> {
+    type Target = V;
+
+    fn deref(&self) -> &Self::Target {
+        todo!()
     }
 }
 
@@ -234,7 +300,7 @@ mod tests {
 
     #[test]
     fn multiple() {
-        let n = 32;
+        let n = 1024;
 
         let mut nt = Hamt::<_, _, (), MemStore>::new();
 
@@ -245,5 +311,7 @@ mod tests {
         for i in 0..n {
             assert_eq!(nt.remove(&i).unwrap(), Some(i));
         }
+
+        assert!(nt.correct_empty_state());
     }
 }
