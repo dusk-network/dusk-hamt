@@ -11,9 +11,7 @@ use core::ops::Deref;
 use canonical::{Canon, Store};
 use canonical_derive::Canon;
 
-use microkelvin::{
-    Annotated, Annotation, Branch, Child, ChildMut, Compound, Step,
-};
+use microkelvin::{Annotated, Annotation, Branch, Child, ChildMut, Compound};
 
 #[derive(Clone, Canon, Debug)]
 enum Bucket<K, V, A, S>
@@ -48,7 +46,14 @@ where
 
     fn child(&self, ofs: usize) -> Child<Self, S> {
         match (ofs, &self.0) {
-            (0, [Bucket::Leaf(kv), ..]) => Child::Leaf(kv),
+            (0, [Bucket::Leaf(kv), _, _, _]) => Child::Leaf(kv),
+            (1, [_, Bucket::Leaf(kv), _, _]) => Child::Leaf(kv),
+            (2, [_, _, Bucket::Leaf(kv), _]) => Child::Leaf(kv),
+            (3, [_, _, _, Bucket::Leaf(kv)]) => Child::Leaf(kv),
+            (0, [Bucket::Node(an), _, _, _]) => Child::Node(an),
+            (1, [_, Bucket::Node(an), _, _]) => Child::Node(an),
+            (2, [_, _, Bucket::Node(an), _]) => Child::Node(an),
+            (3, [_, _, _, Bucket::Node(an)]) => Child::Node(an),
             _ => Child::EndOfNode,
         }
     }
@@ -106,7 +111,7 @@ impl<K, V, A, S> Hamt<K, V, A, S>
 where
     K: Canon<S> + Eq,
     V: Canon<S>,
-    A: Canon<S>,
+    A: Canon<S> + Annotation<Self, S>,
     S: Store,
 {
     /// Creates a new empty Hamt
@@ -114,10 +119,7 @@ where
         Self::default()
     }
 
-    pub fn insert(&mut self, key: K, val: V) -> Result<Option<V>, S::Error>
-    where
-        A: Annotation<Self, S>,
-    {
+    pub fn insert(&mut self, key: K, val: V) -> Result<Option<V>, S::Error> {
         let hash = S::ident(&key);
         self._insert(key, val, hash, 0)
     }
@@ -128,10 +130,7 @@ where
         val: V,
         hash: S::Ident,
         depth: usize,
-    ) -> Result<Option<V>, S::Error>
-    where
-        A: Annotation<Self, S>,
-    {
+    ) -> Result<Option<V>, S::Error> {
         let slot = slot(&hash, depth);
         let bucket = &mut self.0[slot];
 
@@ -182,10 +181,7 @@ where
         }
     }
 
-    pub fn remove(&mut self, key: &K) -> Result<Option<V>, S::Error>
-    where
-        A: Annotation<Self, S>,
-    {
+    pub fn remove(&mut self, key: &K) -> Result<Option<V>, S::Error> {
         let hash = S::ident(key);
         self._remove(key, hash, 0)
     }
@@ -195,10 +191,7 @@ where
         key: &K,
         hash: S::Ident,
         depth: usize,
-    ) -> Result<Option<V>, S::Error>
-    where
-        A: Annotation<Self, S>,
-    {
+    ) -> Result<Option<V>, S::Error> {
         let slot = slot(&hash, depth);
         let bucket = &mut self.0[slot];
 
@@ -237,29 +230,46 @@ where
         }
     }
 
-    fn get(&self, key: &K) -> Result<Option<impl Deref<Target = V>>, S::Error>
+    pub fn get<'a>(
+        &'a self,
+        key: &K,
+    ) -> Result<Option<impl Deref<Target = V> + 'a>, S::Error>
     where
-        A: Annotation<Self, S>,
+        K: core::fmt::Debug,
+        V: core::fmt::Debug,
+        A: core::fmt::Debug,
+        S: core::fmt::Debug,
     {
         let hash = S::ident(key);
         let mut depth = 0;
-
-        let branch = Branch::walk(self, |node| {
-            let _slot = slot(&hash, depth);
+        Ok(Branch::path(self, || {
+            let ofs = slot(&hash, depth);
             depth += 1;
-            Step::Abort
-        });
-        Ok(Some(ValRef::<K, V, A, S>(None)))
+            ofs
+        })?
+        .filter(|branch| &(*branch).0 == key)
+        .map(|branch| ValRef(branch)))
     }
 }
 
-struct ValRef<K, V, A, S>(Option<(K, V, A, S)>);
+struct ValRef<'a, K, V, A, S>(Branch<'a, Hamt<K, V, A, S>, S>)
+where
+    K: Canon<S>,
+    V: Canon<S>,
+    A: Canon<S>,
+    S: Store;
 
-impl<K, V, A, S> Deref for ValRef<K, V, A, S> {
+impl<'a, K, V, A, S> Deref for ValRef<'a, K, V, A, S>
+where
+    K: Canon<S>,
+    V: Canon<S>,
+    A: Canon<S>,
+    S: Store,
+{
     type Target = V;
 
     fn deref(&self) -> &Self::Target {
-        todo!()
+        &(*self.0).1
     }
 }
 
@@ -271,47 +281,62 @@ mod tests {
 
     #[test]
     fn trivial() {
-        let mut nt = Hamt::<u32, u32, (), MemStore>::new();
-        assert_eq!(nt.remove(&0).unwrap(), None);
+        let mut hamt = Hamt::<u32, u32, (), MemStore>::new();
+        assert_eq!(hamt.remove(&0).unwrap(), None);
     }
 
     #[test]
     fn replace() {
-        let mut nt = Hamt::<u32, u32, (), MemStore>::new();
-        assert_eq!(nt.insert(0, 38).unwrap(), None);
-        assert_eq!(nt.insert(0, 0).unwrap(), Some(38));
+        let mut hamt = Hamt::<u32, u32, (), MemStore>::new();
+        assert_eq!(hamt.insert(0, 38).unwrap(), None);
+        assert_eq!(hamt.insert(0, 0).unwrap(), Some(38));
     }
 
     #[test]
     fn insert_remove() {
-        let mut nt = Hamt::<_, _, (), MemStore>::new();
-        nt.insert(8, 8).unwrap();
-        assert_eq!(nt.remove(&8).unwrap(), Some(8));
+        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+        hamt.insert(8, 8).unwrap();
+        assert_eq!(hamt.remove(&8).unwrap(), Some(8));
     }
 
     #[test]
     fn double() {
-        let mut nt = Hamt::<_, _, (), MemStore>::new();
-        nt.insert(0, 0).unwrap();
-        nt.insert(1, 1).unwrap();
-        assert_eq!(nt.remove(&1).unwrap(), Some(1));
-        assert_eq!(nt.remove(&0).unwrap(), Some(0));
+        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+        hamt.insert(0, 0).unwrap();
+        hamt.insert(1, 1).unwrap();
+        assert_eq!(hamt.remove(&1).unwrap(), Some(1));
+        assert_eq!(hamt.remove(&0).unwrap(), Some(0));
     }
 
     #[test]
     fn multiple() {
         let n = 1024;
 
-        let mut nt = Hamt::<_, _, (), MemStore>::new();
+        let mut hamt = Hamt::<_, _, (), MemStore>::new();
 
         for i in 0..n {
-            nt.insert(i, i).unwrap();
+            hamt.insert(i, i).unwrap();
         }
 
         for i in 0..n {
-            assert_eq!(nt.remove(&i).unwrap(), Some(i));
+            assert_eq!(hamt.remove(&i).unwrap(), Some(i));
         }
 
-        assert!(nt.correct_empty_state());
+        assert!(hamt.correct_empty_state());
+    }
+
+    #[test]
+    fn insert_get() {
+        let n = 1024;
+
+        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+
+        for i in 0..n {
+            hamt.insert(i, i).unwrap();
+        }
+
+        for i in 0..n {
+            assert_eq!(*hamt.get(&i).unwrap().unwrap(), i);
+        }
     }
 }
