@@ -6,12 +6,14 @@
 
 //! Hamt
 use core::mem;
-use core::ops::Deref;
+use core::ops::{Deref, DerefMut};
 
 use canonical::{Canon, Store};
 use canonical_derive::Canon;
 
-use microkelvin::{Annotated, Annotation, Branch, Child, ChildMut, Compound};
+use microkelvin::{
+    Annotated, Annotation, Branch, BranchMut, Child, ChildMut, Compound,
+};
 
 #[derive(Clone, Canon, Debug)]
 enum Bucket<K, V, A, S>
@@ -46,20 +48,30 @@ where
 
     fn child(&self, ofs: usize) -> Child<Self, S> {
         match (ofs, &self.0) {
-            (0, [Bucket::Leaf(kv), _, _, _]) => Child::Leaf(kv),
-            (1, [_, Bucket::Leaf(kv), _, _]) => Child::Leaf(kv),
-            (2, [_, _, Bucket::Leaf(kv), _]) => Child::Leaf(kv),
-            (3, [_, _, _, Bucket::Leaf(kv)]) => Child::Leaf(kv),
-            (0, [Bucket::Node(an), _, _, _]) => Child::Node(an),
-            (1, [_, Bucket::Node(an), _, _]) => Child::Node(an),
-            (2, [_, _, Bucket::Node(an), _]) => Child::Node(an),
-            (3, [_, _, _, Bucket::Node(an)]) => Child::Node(an),
+            (0, [Bucket::Leaf(ref kv), _, _, _]) => Child::Leaf(kv),
+            (1, [_, Bucket::Leaf(ref kv), _, _]) => Child::Leaf(kv),
+            (2, [_, _, Bucket::Leaf(ref kv), _]) => Child::Leaf(kv),
+            (3, [_, _, _, Bucket::Leaf(ref kv)]) => Child::Leaf(kv),
+            (0, [Bucket::Node(ref an), _, _, _]) => Child::Node(an),
+            (1, [_, Bucket::Node(ref an), _, _]) => Child::Node(an),
+            (2, [_, _, Bucket::Node(ref an), _]) => Child::Node(an),
+            (3, [_, _, _, Bucket::Node(ref an)]) => Child::Node(an),
             _ => Child::EndOfNode,
         }
     }
 
-    fn child_mut(&mut self, _ofs: usize) -> ChildMut<Self, S> {
-        todo!()
+    fn child_mut(&mut self, ofs: usize) -> ChildMut<Self, S> {
+        match (ofs, &mut self.0) {
+            (0, [Bucket::Leaf(ref mut kv), _, _, _]) => ChildMut::Leaf(kv),
+            (1, [_, Bucket::Leaf(ref mut kv), _, _]) => ChildMut::Leaf(kv),
+            (2, [_, _, Bucket::Leaf(ref mut kv), _]) => ChildMut::Leaf(kv),
+            (3, [_, _, _, Bucket::Leaf(ref mut kv)]) => ChildMut::Leaf(kv),
+            (0, [Bucket::Node(ref mut an), _, _, _]) => ChildMut::Node(an),
+            (1, [_, Bucket::Node(ref mut an), _, _]) => ChildMut::Node(an),
+            (2, [_, _, Bucket::Node(ref mut an), _]) => ChildMut::Node(an),
+            (3, [_, _, _, Bucket::Node(ref mut an)]) => ChildMut::Node(an),
+            _ => ChildMut::EndOfNode,
+        }
     }
 }
 
@@ -111,7 +123,7 @@ impl<K, V, A, S> Hamt<K, V, A, S>
 where
     K: Canon<S> + Eq,
     V: Canon<S>,
-    A: Canon<S> + Annotation<Self, S>,
+    A: Canon<S> + Annotation<Self, <Self as Compound<S>>::Leaf>,
     S: Store,
 {
     /// Creates a new empty Hamt
@@ -144,7 +156,7 @@ where
                     *bucket = Bucket::Leaf((key, val));
                     Ok(Some(old_val))
                 } else {
-                    let mut new_node = Hamt::<_, _, A, S>::new();
+                    let mut new_node = Hamt::<_, _, _, S>::new();
                     let old_hash = S::ident(&old_key);
 
                     new_node._insert(key, val, hash, depth + 1)?;
@@ -237,7 +249,6 @@ where
     where
         K: core::fmt::Debug,
         V: core::fmt::Debug,
-        A: core::fmt::Debug,
         S: core::fmt::Debug,
     {
         let hash = S::ident(key);
@@ -249,6 +260,26 @@ where
         })?
         .filter(|branch| &(*branch).0 == key)
         .map(|branch| ValRef(branch)))
+    }
+
+    pub fn get_mut<'a>(
+        &'a mut self,
+        key: &K,
+    ) -> Result<Option<impl DerefMut<Target = V> + 'a>, S::Error>
+    where
+        K: core::fmt::Debug,
+        V: core::fmt::Debug,
+        S: core::fmt::Debug,
+    {
+        let hash = S::ident(key);
+        let mut depth = 0;
+        Ok(BranchMut::path(self, || {
+            let ofs = slot(&hash, depth);
+            depth += 1;
+            ofs
+        })?
+        .filter(|branch| &(*branch).0 == key)
+        .map(|branch| ValRefMut(branch)))
     }
 }
 
@@ -270,6 +301,39 @@ where
 
     fn deref(&self) -> &Self::Target {
         &(*self.0).1
+    }
+}
+
+struct ValRefMut<'a, K, V, A, S>(BranchMut<'a, Hamt<K, V, A, S>, S>)
+where
+    K: Canon<S>,
+    V: Canon<S>,
+    A: Canon<S> + Annotation<Hamt<K, V, A, S>, (K, V)>,
+    S: Store;
+
+impl<'a, K, V, A, S> Deref for ValRefMut<'a, K, V, A, S>
+where
+    K: Canon<S>,
+    V: Canon<S>,
+    A: Canon<S> + Annotation<Hamt<K, V, A, S>, (K, V)>,
+    S: Store,
+{
+    type Target = V;
+
+    fn deref(&self) -> &Self::Target {
+        &(*self.0).1
+    }
+}
+
+impl<'a, K, V, A, S> DerefMut for ValRefMut<'a, K, V, A, S>
+where
+    K: Canon<S>,
+    V: Canon<S>,
+    A: Canon<S> + Annotation<Hamt<K, V, A, S>, (K, V)>,
+    S: Store,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut (*self.0).1
     }
 }
 
@@ -337,6 +401,25 @@ mod tests {
 
         for i in 0..n {
             assert_eq!(*hamt.get(&i).unwrap().unwrap(), i);
+        }
+    }
+
+    #[test]
+    fn insert_get_mut() {
+        let n = 1024;
+
+        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+
+        for i in 0..n {
+            hamt.insert(i, i).unwrap();
+        }
+
+        for i in 0..n {
+            *hamt.get_mut(&i).unwrap().unwrap() += 1;
+        }
+
+        for i in 0..n {
+            assert_eq!(*hamt.get(&i).unwrap().unwrap(), i + 1);
         }
     }
 }
