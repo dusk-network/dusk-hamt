@@ -8,45 +8,41 @@
 use core::mem;
 use core::ops::{Deref, DerefMut};
 
-use canonical::{Canon, Store};
+use canonical::{Canon, CanonError, Id, Store};
 use canonical_derive::Canon;
 
 use microkelvin::{
-    Annotated, Annotation, Branch, BranchMut, Child, ChildMut, Compound,
+    Annotated, Branch, BranchMut, Child, ChildMut, Compound, Nth,
 };
 
 #[derive(Clone, Canon, Debug)]
-enum Bucket<K, V, A, S>
+enum Bucket<K, V, A>
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S>,
-    S: Store,
+    K: Canon,
+    V: Canon,
+    A: Canon,
 {
     Empty,
     Leaf((K, V)),
-    Node(Annotated<Hamt<K, V, A, S>, S>),
+    Node(Annotated<Hamt<K, V, A>, A>),
 }
 
 #[derive(Clone, Canon, Debug)]
-pub struct Hamt<K, V, A, S>([Bucket<K, V, A, S>; 4])
+pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4])
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S>,
-    S: Store;
+    K: Canon,
+    V: Canon,
+    A: Canon;
 
-impl<K, V, A, S> Compound<S> for Hamt<K, V, A, S>
+impl<K, V, A> Compound<A> for Hamt<K, V, A>
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S>,
-    S: Store,
+    K: Canon,
+    V: Canon,
+    A: Canon,
 {
     type Leaf = (K, V);
-    type Annotation = A;
 
-    fn child(&self, ofs: usize) -> Child<Self, S> {
+    fn child(&self, ofs: usize) -> Child<Self, A> {
         match (ofs, &self.0) {
             (0, [Bucket::Leaf(ref kv), _, _, _]) => Child::Leaf(kv),
             (1, [_, Bucket::Leaf(ref kv), _, _]) => Child::Leaf(kv),
@@ -60,7 +56,7 @@ where
         }
     }
 
-    fn child_mut(&mut self, ofs: usize) -> ChildMut<Self, S> {
+    fn child_mut(&mut self, ofs: usize) -> ChildMut<Self, A> {
         match (ofs, &mut self.0) {
             (0, [Bucket::Leaf(ref mut kv), _, _, _]) => ChildMut::Leaf(kv),
             (1, [_, Bucket::Leaf(ref mut kv), _, _]) => ChildMut::Leaf(kv),
@@ -75,36 +71,33 @@ where
     }
 }
 
-impl<K, V, A, S> Bucket<K, V, A, S>
+impl<K, V, A> Bucket<K, V, A>
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S>,
-    S: Store,
+    K: Canon,
+    V: Canon,
+    A: Canon,
 {
     fn take(&mut self) -> Self {
         mem::replace(self, Bucket::Empty)
     }
 }
 
-impl<K, V, A, S> Default for Bucket<K, V, A, S>
+impl<K, V, A> Default for Bucket<K, V, A>
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S>,
-    S: Store,
+    K: Canon,
+    V: Canon,
+    A: Canon,
 {
     fn default() -> Self {
         Bucket::Empty
     }
 }
 
-impl<K, V, A, S> Default for Hamt<K, V, A, S>
+impl<K, V, A> Default for Hamt<K, V, A>
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S>,
-    S: Store,
+    K: Canon,
+    V: Canon,
+    A: Canon,
 {
     fn default() -> Self {
         Hamt(Default::default())
@@ -119,20 +112,22 @@ where
     (hash.as_ref()[depth] % 4) as usize
 }
 
-impl<K, V, A, S> Hamt<K, V, A, S>
+impl<K, V, A> Hamt<K, V, A>
 where
-    K: Canon<S> + Eq,
-    V: Canon<S>,
-    A: Canon<S> + Annotation<Self, <Self as Compound<S>>::Leaf>,
-    S: Store,
+    K: Canon + Eq,
+    V: Canon,
+    A: Canon,
 {
     /// Creates a new empty Hamt
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn insert(&mut self, key: K, val: V) -> Result<Option<V>, S::Error> {
-        let hash = S::ident(&key);
+    pub fn insert(&mut self, key: K, val: V) -> Result<Option<V>, CanonError> {
+        let hash = Store::canon_hash(&key);
+
+        println!("inserting key with hash {:?}", hash);
+
         self._insert(key, val, hash, 0)
     }
 
@@ -140,9 +135,9 @@ where
         &mut self,
         key: K,
         val: V,
-        hash: S::Ident,
+        hash: [u8; 32],
         depth: usize,
-    ) -> Result<Option<V>, S::Error> {
+    ) -> Result<Option<V>, CanonError> {
         let slot = slot(&hash, depth);
         let bucket = &mut self.0[slot];
 
@@ -156,8 +151,8 @@ where
                     *bucket = Bucket::Leaf((key, val));
                     Ok(Some(old_val))
                 } else {
-                    let mut new_node = Hamt::<_, _, _, S>::new();
-                    let old_hash = S::ident(&old_key);
+                    let mut new_node = Hamt::new();
+                    let old_hash = Store::canon_hash(&old_key);
 
                     new_node._insert(key, val, hash, depth + 1)?;
                     new_node._insert(old_key, old_val, old_hash, depth + 1)?;
@@ -193,17 +188,17 @@ where
         }
     }
 
-    pub fn remove(&mut self, key: &K) -> Result<Option<V>, S::Error> {
-        let hash = S::ident(key);
+    pub fn remove(&mut self, key: &K) -> Result<Option<V>, CanonError> {
+        let hash = Store::canon_hash(key);
         self._remove(key, hash, 0)
     }
 
     fn _remove(
         &mut self,
         key: &K,
-        hash: S::Ident,
+        hash: [u8; 32],
         depth: usize,
-    ) -> Result<Option<V>, S::Error> {
+    ) -> Result<Option<V>, CanonError> {
         let slot = slot(&hash, depth);
         let bucket = &mut self.0[slot];
 
@@ -245,13 +240,8 @@ where
     pub fn get<'a>(
         &'a self,
         key: &K,
-    ) -> Result<Option<impl Deref<Target = V> + 'a>, S::Error>
-    where
-        K: core::fmt::Debug,
-        V: core::fmt::Debug,
-        S: core::fmt::Debug,
-    {
-        let hash = S::ident(key);
+    ) -> Result<Option<impl Deref<Target = V> + 'a>, CanonError> {
+        let hash = Store::canon_hash(key);
         let mut depth = 0;
         Ok(Branch::path(self, || {
             let ofs = slot(&hash, depth);
@@ -265,13 +255,8 @@ where
     pub fn get_mut<'a>(
         &'a mut self,
         key: &K,
-    ) -> Result<Option<impl DerefMut<Target = V> + 'a>, S::Error>
-    where
-        K: core::fmt::Debug,
-        V: core::fmt::Debug,
-        S: core::fmt::Debug,
-    {
-        let hash = S::ident(key);
+    ) -> Result<Option<impl DerefMut<Target = V> + 'a>, CanonError> {
+        let hash = Store::canon_hash(key);
         let mut depth = 0;
         Ok(BranchMut::path(self, || {
             let ofs = slot(&hash, depth);
@@ -283,19 +268,17 @@ where
     }
 }
 
-struct ValRef<'a, K, V, A, S>(Branch<'a, Hamt<K, V, A, S>, S>)
+struct ValRef<'a, K, V, A>(Branch<'a, Hamt<K, V, A>, A>)
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S>,
-    S: Store;
+    K: Canon,
+    V: Canon,
+    A: Canon;
 
-impl<'a, K, V, A, S> Deref for ValRef<'a, K, V, A, S>
+impl<'a, K, V, A> Deref for ValRef<'a, K, V, A>
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S>,
-    S: Store,
+    K: Canon,
+    V: Canon,
+    A: Canon,
 {
     type Target = V;
 
@@ -304,19 +287,17 @@ where
     }
 }
 
-struct ValRefMut<'a, K, V, A, S>(BranchMut<'a, Hamt<K, V, A, S>, S>)
+struct ValRefMut<'a, K, V, A>(BranchMut<'a, Hamt<K, V, A>, A>)
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S> + Annotation<Hamt<K, V, A, S>, (K, V)>,
-    S: Store;
+    K: Canon,
+    V: Canon,
+    A: Canon;
 
-impl<'a, K, V, A, S> Deref for ValRefMut<'a, K, V, A, S>
+impl<'a, K, V, A> Deref for ValRefMut<'a, K, V, A>
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S> + Annotation<Hamt<K, V, A, S>, (K, V)>,
-    S: Store,
+    K: Canon,
+    V: Canon,
+    A: Canon,
 {
     type Target = V;
 
@@ -325,12 +306,11 @@ where
     }
 }
 
-impl<'a, K, V, A, S> DerefMut for ValRefMut<'a, K, V, A, S>
+impl<'a, K, V, A> DerefMut for ValRefMut<'a, K, V, A>
 where
-    K: Canon<S>,
-    V: Canon<S>,
-    A: Canon<S> + Annotation<Hamt<K, V, A, S>, (K, V)>,
-    S: Store,
+    K: Canon,
+    V: Canon,
+    A: Canon,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut (*self.0).1
@@ -341,32 +321,34 @@ where
 mod tests {
     use super::*;
 
-    use canonical_host::MemStore;
+    use microkelvin::Cardinality;
 
     #[test]
     fn trivial() {
-        let mut hamt = Hamt::<u32, u32, (), MemStore>::new();
+        let mut hamt = Hamt::<u32, u32, ()>::new();
         assert_eq!(hamt.remove(&0).unwrap(), None);
     }
 
     #[test]
     fn replace() {
-        let mut hamt = Hamt::<u32, u32, (), MemStore>::new();
+        let mut hamt = Hamt::<u32, u32, ()>::new();
         assert_eq!(hamt.insert(0, 38).unwrap(), None);
         assert_eq!(hamt.insert(0, 0).unwrap(), Some(38));
     }
 
     #[test]
     fn insert_remove() {
-        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+        let mut hamt = Hamt::<_, _, ()>::new();
         hamt.insert(8, 8).unwrap();
         assert_eq!(hamt.remove(&8).unwrap(), Some(8));
     }
 
     #[test]
     fn double() {
-        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+        let mut hamt = Hamt::<_, _, ()>::new();
+        println!("insert 0");
         hamt.insert(0, 0).unwrap();
+        println!("insert 1");
         hamt.insert(1, 1).unwrap();
         assert_eq!(hamt.remove(&1).unwrap(), Some(1));
         assert_eq!(hamt.remove(&0).unwrap(), Some(0));
@@ -376,7 +358,7 @@ mod tests {
     fn multiple() {
         let n = 1024;
 
-        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+        let mut hamt = Hamt::<_, _, ()>::new();
 
         for i in 0..n {
             hamt.insert(i, i).unwrap();
@@ -393,7 +375,7 @@ mod tests {
     fn insert_get() {
         let n = 1024;
 
-        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+        let mut hamt = Hamt::<_, _, ()>::new();
 
         for i in 0..n {
             hamt.insert(i, i).unwrap();
@@ -405,10 +387,32 @@ mod tests {
     }
 
     #[test]
+    fn nth() {
+        let n: u64 = 1024;
+
+        let mut hamt = Hamt::<_, _, Cardinality>::new();
+
+        let mut result: Vec<u64> = vec![];
+        let mut sorted = vec![];
+
+        for i in 0..n {
+            hamt.insert(i, i).unwrap();
+        }
+
+        for i in 0..n {
+            sorted.push(i);
+            let res = hamt.nth(i).unwrap().unwrap().1;
+            result.push(res);
+        }
+
+        assert_eq!(result, sorted);
+    }
+
+    #[test]
     fn insert_get_mut() {
         let n = 1024;
 
-        let mut hamt = Hamt::<_, _, (), MemStore>::new();
+        let mut hamt = Hamt::<_, _, ()>::new();
 
         for i in 0..n {
             hamt.insert(i, i).unwrap();
