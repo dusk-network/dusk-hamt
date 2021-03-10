@@ -8,31 +8,22 @@
 use core::mem;
 use core::ops::{Deref, DerefMut};
 
-use canonical::{Canon, CanonError, Id, Store};
+use canonical::{Canon, CanonError, Store};
 use canonical_derive::Canon;
 
 use microkelvin::{
-    Annotated, Branch, BranchMut, Child, ChildMut, Compound, Nth,
+    Annotated, Annotation, Branch, BranchMut, Child, ChildMut, Compound,
 };
 
 #[derive(Clone, Canon, Debug)]
-enum Bucket<K, V, A>
-where
-    K: Canon,
-    V: Canon,
-    A: Canon,
-{
+enum Bucket<K, V, A> {
     Empty,
     Leaf((K, V)),
     Node(Annotated<Hamt<K, V, A>, A>),
 }
 
 #[derive(Clone, Canon, Debug)]
-pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4])
-where
-    K: Canon,
-    V: Canon,
-    A: Canon;
+pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4]);
 
 impl<K, V, A> Compound<A> for Hamt<K, V, A>
 where
@@ -43,62 +34,37 @@ where
     type Leaf = (K, V);
 
     fn child(&self, ofs: usize) -> Child<Self, A> {
-        match (ofs, &self.0) {
-            (0, [Bucket::Leaf(ref kv), _, _, _]) => Child::Leaf(kv),
-            (1, [_, Bucket::Leaf(ref kv), _, _]) => Child::Leaf(kv),
-            (2, [_, _, Bucket::Leaf(ref kv), _]) => Child::Leaf(kv),
-            (3, [_, _, _, Bucket::Leaf(ref kv)]) => Child::Leaf(kv),
-            (0, [Bucket::Node(ref an), _, _, _]) => Child::Node(an),
-            (1, [_, Bucket::Node(ref an), _, _]) => Child::Node(an),
-            (2, [_, _, Bucket::Node(ref an), _]) => Child::Node(an),
-            (3, [_, _, _, Bucket::Node(ref an)]) => Child::Node(an),
-            _ => Child::EndOfNode,
+        match self.0.get(ofs) {
+            Some(Bucket::Empty) => Child::Empty,
+            Some(Bucket::Leaf(ref kv)) => Child::Leaf(kv),
+            Some(Bucket::Node(ref nd)) => Child::Node(nd),
+            None => Child::EndOfNode,
         }
     }
 
     fn child_mut(&mut self, ofs: usize) -> ChildMut<Self, A> {
-        match (ofs, &mut self.0) {
-            (0, [Bucket::Leaf(ref mut kv), _, _, _]) => ChildMut::Leaf(kv),
-            (1, [_, Bucket::Leaf(ref mut kv), _, _]) => ChildMut::Leaf(kv),
-            (2, [_, _, Bucket::Leaf(ref mut kv), _]) => ChildMut::Leaf(kv),
-            (3, [_, _, _, Bucket::Leaf(ref mut kv)]) => ChildMut::Leaf(kv),
-            (0, [Bucket::Node(ref mut an), _, _, _]) => ChildMut::Node(an),
-            (1, [_, Bucket::Node(ref mut an), _, _]) => ChildMut::Node(an),
-            (2, [_, _, Bucket::Node(ref mut an), _]) => ChildMut::Node(an),
-            (3, [_, _, _, Bucket::Node(ref mut an)]) => ChildMut::Node(an),
-            _ => ChildMut::EndOfNode,
+        match self.0.get_mut(ofs) {
+            Some(Bucket::Empty) => ChildMut::Empty,
+            Some(Bucket::Leaf(ref mut kv)) => ChildMut::Leaf(kv),
+            Some(Bucket::Node(ref mut nd)) => ChildMut::Node(nd),
+            None => ChildMut::EndOfNode,
         }
     }
 }
 
-impl<K, V, A> Bucket<K, V, A>
-where
-    K: Canon,
-    V: Canon,
-    A: Canon,
-{
+impl<K, V, A> Bucket<K, V, A> {
     fn take(&mut self) -> Self {
         mem::replace(self, Bucket::Empty)
     }
 }
 
-impl<K, V, A> Default for Bucket<K, V, A>
-where
-    K: Canon,
-    V: Canon,
-    A: Canon,
-{
+impl<K, V, A> Default for Bucket<K, V, A> {
     fn default() -> Self {
         Bucket::Empty
     }
 }
 
-impl<K, V, A> Default for Hamt<K, V, A>
-where
-    K: Canon,
-    V: Canon,
-    A: Canon,
-{
+impl<K, V, A> Default for Hamt<K, V, A> {
     fn default() -> Self {
         Hamt(Default::default())
     }
@@ -114,9 +80,9 @@ where
 
 impl<K, V, A> Hamt<K, V, A>
 where
-    K: Canon + Eq,
+    K: Eq + Canon,
     V: Canon,
-    A: Canon,
+    A: Annotation<(K, V)> + Canon,
 {
     /// Creates a new empty Hamt
     pub fn new() -> Self {
@@ -125,9 +91,6 @@ where
 
     pub fn insert(&mut self, key: K, val: V) -> Result<Option<V>, CanonError> {
         let hash = Store::canon_hash(&key);
-
-        println!("inserting key with hash {:?}", hash);
-
         self._insert(key, val, hash, 0)
     }
 
@@ -249,7 +212,7 @@ where
             ofs
         })?
         .filter(|branch| &(*branch).0 == key)
-        .map(|branch| ValRef(branch)))
+        .map(|b| b.map_leaf(|leaf| &leaf.1)))
     }
 
     pub fn get_mut<'a>(
@@ -264,64 +227,14 @@ where
             ofs
         })?
         .filter(|branch| &(*branch).0 == key)
-        .map(|branch| ValRefMut(branch)))
-    }
-}
-
-struct ValRef<'a, K, V, A>(Branch<'a, Hamt<K, V, A>, A>)
-where
-    K: Canon,
-    V: Canon,
-    A: Canon;
-
-impl<'a, K, V, A> Deref for ValRef<'a, K, V, A>
-where
-    K: Canon,
-    V: Canon,
-    A: Canon,
-{
-    type Target = V;
-
-    fn deref(&self) -> &Self::Target {
-        &(*self.0).1
-    }
-}
-
-struct ValRefMut<'a, K, V, A>(BranchMut<'a, Hamt<K, V, A>, A>)
-where
-    K: Canon,
-    V: Canon,
-    A: Canon;
-
-impl<'a, K, V, A> Deref for ValRefMut<'a, K, V, A>
-where
-    K: Canon,
-    V: Canon,
-    A: Canon,
-{
-    type Target = V;
-
-    fn deref(&self) -> &Self::Target {
-        &(*self.0).1
-    }
-}
-
-impl<'a, K, V, A> DerefMut for ValRefMut<'a, K, V, A>
-where
-    K: Canon,
-    V: Canon,
-    A: Canon,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut (*self.0).1
+        .map(|b| b.map_leaf_mut(|leaf| &mut leaf.1)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use microkelvin::Cardinality;
+    use microkelvin::{Cardinality, Nth};
 
     #[test]
     fn trivial() {
@@ -334,24 +247,6 @@ mod tests {
         let mut hamt = Hamt::<u32, u32, ()>::new();
         assert_eq!(hamt.insert(0, 38).unwrap(), None);
         assert_eq!(hamt.insert(0, 0).unwrap(), Some(38));
-    }
-
-    #[test]
-    fn insert_remove() {
-        let mut hamt = Hamt::<_, _, ()>::new();
-        hamt.insert(8, 8).unwrap();
-        assert_eq!(hamt.remove(&8).unwrap(), Some(8));
-    }
-
-    #[test]
-    fn double() {
-        let mut hamt = Hamt::<_, _, ()>::new();
-        println!("insert 0");
-        hamt.insert(0, 0).unwrap();
-        println!("insert 1");
-        hamt.insert(1, 1).unwrap();
-        assert_eq!(hamt.remove(&1).unwrap(), Some(1));
-        assert_eq!(hamt.remove(&0).unwrap(), Some(0));
     }
 
     #[test]
@@ -400,10 +295,12 @@ mod tests {
         }
 
         for i in 0..n {
+            let res = hamt.nth(i).unwrap();
+            result.push(res.unwrap().1);
             sorted.push(i);
-            let res = hamt.nth(i).unwrap().unwrap().1;
-            result.push(res);
         }
+
+        result.sort();
 
         assert_eq!(result, sorted);
     }
