@@ -10,5 +10,5 @@ keywords = ["merkle", "datastructure", "hamt"]
 
 [dependencies]
 microkelvin = { path = "../microkelvin" }
-canonical = { path = "../canonical/canon", features = ["host"] }
+canonical = { path = "../canonical/canon" }
 canonical_derive = { path = "../canonical/canon_derive" }
