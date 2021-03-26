@@ -8,7 +8,7 @@
 use core::mem;
 use core::ops::{Deref, DerefMut};
 
-use canonical::{Canon, CanonError, Store};
+use canonical::{Canon, CanonError, Id};
 use canonical_derive::Canon;
 
 use microkelvin::{
@@ -90,7 +90,7 @@ where
     }
 
     pub fn insert(&mut self, key: K, val: V) -> Result<Option<V>, CanonError> {
-        let hash = Store::canon_hash(&key);
+        let hash = Id::new(&key).hash();
         self._insert(key, val, hash, 0)
     }
 
@@ -115,7 +115,7 @@ where
                     Ok(Some(old_val))
                 } else {
                     let mut new_node = Hamt::new();
-                    let old_hash = Store::canon_hash(&old_key);
+                    let old_hash = Id::new(&old_key).hash();
 
                     new_node._insert(key, val, hash, depth + 1)?;
                     new_node._insert(old_key, old_val, old_hash, depth + 1)?;
@@ -152,7 +152,7 @@ where
     }
 
     pub fn remove(&mut self, key: &K) -> Result<Option<V>, CanonError> {
-        let hash = Store::canon_hash(key);
+        let hash = Id::new(key).hash();
         self._remove(key, hash, 0)
     }
 
@@ -204,7 +204,7 @@ where
         &'a self,
         key: &K,
     ) -> Result<Option<impl Deref<Target = V> + 'a>, CanonError> {
-        let hash = Store::canon_hash(key);
+        let hash = Id::new(key).hash();
         let mut depth = 0;
         Ok(Branch::path(self, || {
             let ofs = slot(&hash, depth);
@@ -219,7 +219,7 @@ where
         &'a mut self,
         key: &K,
     ) -> Result<Option<impl DerefMut<Target = V> + 'a>, CanonError> {
-        let hash = Store::canon_hash(key);
+        let hash = Id::new(key).hash();
         let mut depth = 0;
         Ok(BranchMut::path(self, || {
             let ofs = slot(&hash, depth);
