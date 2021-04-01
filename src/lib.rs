@@ -324,3 +324,30 @@ mod tests {
         }
     }
 }
+
+#[test]
+fn iterate() {
+    let n: u64 = 1024;
+
+    use microkelvin::{Cardinality, Nth};
+
+    let mut hamt = Hamt::<_, _, Cardinality>::new();
+
+    let mut reference = vec![];
+    let mut from_iter = vec![];
+
+    for i in 0..n {
+        hamt.insert(i, i).unwrap();
+        reference.push(i);
+    }
+
+    for leaf in hamt.nth(0).unwrap().unwrap() {
+        let val = leaf.unwrap().1;
+        from_iter.push(val);
+    }
+
+    reference.sort();
+    from_iter.sort();
+
+    assert_eq!(from_iter, reference)
+}
