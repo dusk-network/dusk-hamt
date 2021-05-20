@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add simplified default type [#6](https://github.com/dusk-network/dusk-hamt/issues/6)
+
 ## [0.2.0]
 
 ### Changed
