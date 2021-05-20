@@ -28,6 +28,8 @@ enum Bucket<K, V, A> {
 #[derive(Clone, Canon, Debug)]
 pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4]);
 
+pub type Map<K, V> = Hamt<K, V, ()>;
+
 impl<K, V, A> Compound<A> for Hamt<K, V, A>
 where
     K: Canon,
@@ -241,13 +243,13 @@ mod tests {
 
     #[test]
     fn trivial() {
-        let mut hamt = Hamt::<u32, u32, ()>::new();
+        let mut hamt: Map<u32, u32> = Map::new();
         assert_eq!(hamt.remove(&0).unwrap(), None);
     }
 
     #[test]
     fn replace() {
-        let mut hamt = Hamt::<u32, u32, ()>::new();
+        let mut hamt: Map<u32, u32> = Map::new();
         assert_eq!(hamt.insert(0, 38).unwrap(), None);
         assert_eq!(hamt.insert(0, 0).unwrap(), Some(38));
     }
@@ -256,7 +258,7 @@ mod tests {
     fn multiple() {
         let n = 1024;
 
-        let mut hamt = Hamt::<_, _, ()>::new();
+        let mut hamt = Map::new();
 
         for i in 0..n {
             hamt.insert(i, i).unwrap();
@@ -273,7 +275,7 @@ mod tests {
     fn insert_get() {
         let n = 1024;
 
-        let mut hamt = Hamt::<_, _, ()>::new();
+        let mut hamt = Map::new();
 
         for i in 0..n {
             hamt.insert(i, i).unwrap();
@@ -312,7 +314,7 @@ mod tests {
     fn insert_get_mut() {
         let n = 1024;
 
-        let mut hamt = Hamt::<_, _, ()>::new();
+        let mut hamt = Map::new();
 
         for i in 0..n {
             hamt.insert(i, i).unwrap();
