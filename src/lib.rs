@@ -4,6 +4,8 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
+#![no_std]
+
 //! Hamt
 use core::mem;
 use core::ops::{Deref, DerefMut};
@@ -235,8 +237,13 @@ where
 }
 
 #[cfg(test)]
+#[macro_use]
+extern crate alloc;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
     use microkelvin::{Cardinality, Nth};
 
     #[test]
@@ -326,31 +333,31 @@ mod tests {
             assert_eq!(*hamt.get(&i).unwrap().unwrap(), i + 1);
         }
     }
-}
 
-#[test]
-fn iterate() {
-    let n: u64 = 1024;
+    #[test]
+    fn iterate() {
+        let n: u64 = 1024;
 
-    use microkelvin::{Cardinality, Nth};
+        use microkelvin::{Cardinality, Nth};
 
-    let mut hamt = Hamt::<_, _, Cardinality>::new();
+        let mut hamt = Hamt::<_, _, Cardinality>::new();
 
-    let mut reference = vec![];
-    let mut from_iter = vec![];
+        let mut reference = vec![];
+        let mut from_iter = vec![];
 
-    for i in 0..n {
-        hamt.insert(i, i).unwrap();
-        reference.push(i);
+        for i in 0..n {
+            hamt.insert(i, i).unwrap();
+            reference.push(i);
+        }
+
+        for leaf in hamt.nth(0).unwrap().unwrap() {
+            let val = leaf.unwrap().1;
+            from_iter.push(val);
+        }
+
+        reference.sort_unstable();
+        from_iter.sort_unstable();
+
+        assert_eq!(from_iter, reference)
     }
-
-    for leaf in hamt.nth(0).unwrap().unwrap() {
-        let val = leaf.unwrap().1;
-        from_iter.push(val);
-    }
-
-    reference.sort();
-    from_iter.sort();
-
-    assert_eq!(from_iter, reference)
 }
