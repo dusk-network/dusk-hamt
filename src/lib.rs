@@ -5,6 +5,9 @@
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
 //! Hamt
+
+#![no_std]
+
 use core::mem;
 use core::ops::{Deref, DerefMut};
 
@@ -18,8 +21,14 @@ use microkelvin::{
 #[derive(Clone, Canon, Debug)]
 pub struct KvPair<K, V>(K, V);
 
+impl<K, V> AsRef<V> for KvPair<K, V> {
+    fn as_ref(&self) -> &V {
+        &self.1
+    }
+}
+
 #[derive(Clone, Canon, Debug)]
-enum Bucket<K, V, A> {
+pub enum Bucket<K, V, A> {
     Empty,
     Leaf(KvPair<K, V>),
     Node(Annotated<Hamt<K, V, A>, A>),
@@ -27,6 +36,12 @@ enum Bucket<K, V, A> {
 
 #[derive(Clone, Canon, Debug)]
 pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4]);
+
+impl<K, V, A> AsRef<[Bucket<K, V, A>]> for Hamt<K, V, A> {
+    fn as_ref(&self) -> &[Bucket<K, V, A>] {
+        &self.0
+    }
+}
 
 pub type Map<K, V> = Hamt<K, V, ()>;
 
@@ -195,16 +210,6 @@ where
         }
     }
 
-    #[cfg(test)]
-    fn correct_empty_state(&self) -> bool {
-        match self.0 {
-            [Bucket::Empty, Bucket::Empty, Bucket::Empty, Bucket::Empty] => {
-                true
-            }
-            _ => false,
-        }
-    }
-
     pub fn get<'a>(
         &'a self,
         key: &K,
@@ -234,125 +239,4 @@ where
         .filter(|branch| &(*branch).0 == key)
         .map(|b| b.map_leaf_mut(|leaf| &mut leaf.1)))
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use microkelvin::{Cardinality, Nth};
-
-    #[test]
-    fn trivial() {
-        let mut hamt: Map<u32, u32> = Map::new();
-        assert_eq!(hamt.remove(&0).unwrap(), None);
-    }
-
-    #[test]
-    fn replace() {
-        let mut hamt: Map<u32, u32> = Map::new();
-        assert_eq!(hamt.insert(0, 38).unwrap(), None);
-        assert_eq!(hamt.insert(0, 0).unwrap(), Some(38));
-    }
-
-    #[test]
-    fn multiple() {
-        let n = 1024;
-
-        let mut hamt = Map::new();
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-        }
-
-        for i in 0..n {
-            assert_eq!(hamt.remove(&i).unwrap(), Some(i));
-        }
-
-        assert!(hamt.correct_empty_state());
-    }
-
-    #[test]
-    fn insert_get() {
-        let n = 1024;
-
-        let mut hamt = Map::new();
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-        }
-
-        for i in 0..n {
-            assert_eq!(*hamt.get(&i).unwrap().unwrap(), i);
-        }
-    }
-
-    #[test]
-    fn nth() {
-        let n: u64 = 1024;
-
-        let mut hamt = Hamt::<_, _, Cardinality>::new();
-
-        let mut result: Vec<u64> = vec![];
-        let mut sorted = vec![];
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-        }
-
-        for i in 0..n {
-            let res = hamt.nth(i).unwrap();
-            result.push(res.unwrap().1);
-            sorted.push(i);
-        }
-
-        result.sort();
-
-        assert_eq!(result, sorted);
-    }
-
-    #[test]
-    fn insert_get_mut() {
-        let n = 1024;
-
-        let mut hamt = Map::new();
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-        }
-
-        for i in 0..n {
-            *hamt.get_mut(&i).unwrap().unwrap() += 1;
-        }
-
-        for i in 0..n {
-            assert_eq!(*hamt.get(&i).unwrap().unwrap(), i + 1);
-        }
-    }
-}
-
-#[test]
-fn iterate() {
-    let n: u64 = 1024;
-
-    use microkelvin::{Cardinality, Nth};
-
-    let mut hamt = Hamt::<_, _, Cardinality>::new();
-
-    let mut reference = vec![];
-    let mut from_iter = vec![];
-
-    for i in 0..n {
-        hamt.insert(i, i).unwrap();
-        reference.push(i);
-    }
-
-    for leaf in hamt.nth(0).unwrap().unwrap() {
-        let val = leaf.unwrap().1;
-        from_iter.push(val);
-    }
-
-    reference.sort();
-    from_iter.sort();
-
-    assert_eq!(from_iter, reference)
 }
