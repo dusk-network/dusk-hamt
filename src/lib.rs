@@ -14,26 +14,36 @@ use canonical::{Canon, CanonError, Id};
 use canonical_derive::Canon;
 
 use microkelvin::{
-    Annotated, Branch, BranchMut, Child, ChildMut, Combine, Compound,
+    Annotation, Branch, BranchMut, Child, ChildMut, Compound, GenericChild,
+    GenericTree, Link, Step, Walker,
 };
 
 #[derive(Clone, Canon, Debug)]
-pub struct KvPair<K, V>(K, V);
-
-#[derive(Clone, Canon, Debug)]
-enum Bucket<K, V, A> {
-    Empty,
-    Leaf(KvPair<K, V>),
-    Node(Annotated<Hamt<K, V, A>, A>),
+pub struct KvPair<K, V> {
+    pub key: K,
+    pub val: V,
 }
 
 #[derive(Clone, Canon, Debug)]
-pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4]);
+enum Bucket<K, V, A>
+where
+    A: Annotation<KvPair<K, V>>,
+{
+    Empty,
+    Leaf(KvPair<K, V>),
+    Node(Link<Hamt<K, V, A>, A>),
+}
+
+#[derive(Clone, Canon, Debug)]
+pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4])
+where
+    A: Annotation<KvPair<K, V>>;
 
 pub type Map<K, V> = Hamt<K, V, ()>;
 
 impl<K, V, A> Compound<A> for Hamt<K, V, A>
 where
+    A: Annotation<KvPair<K, V>>,
     K: Canon,
     V: Canon,
     A: Canon,
@@ -57,21 +67,44 @@ where
             None => ChildMut::EndOfNode,
         }
     }
+
+    fn from_generic(generic: &GenericTree) -> Result<Self, CanonError> {
+        let mut s = Self::default();
+        for (i, child) in generic.children().iter().enumerate() {
+            match child {
+                GenericChild::Empty => (),
+                GenericChild::Leaf(leaf) => s.0[i] = Bucket::Leaf(leaf.cast()?),
+                GenericChild::Link(id, a) => {
+                    s.0[i] = Bucket::Node(Link::new_persisted(*id, a.cast()?));
+                }
+            }
+        }
+        Ok(s)
+    }
 }
 
-impl<K, V, A> Bucket<K, V, A> {
+impl<K, V, A> Bucket<K, V, A>
+where
+    A: Annotation<KvPair<K, V>>,
+{
     fn take(&mut self) -> Self {
         mem::replace(self, Bucket::Empty)
     }
 }
 
-impl<K, V, A> Default for Bucket<K, V, A> {
+impl<K, V, A> Default for Bucket<K, V, A>
+where
+    A: Annotation<KvPair<K, V>>,
+{
     fn default() -> Self {
         Bucket::Empty
     }
 }
 
-impl<K, V, A> Default for Hamt<K, V, A> {
+impl<K, V, A> Default for Hamt<K, V, A>
+where
+    A: Annotation<KvPair<K, V>>,
+{
     fn default() -> Self {
         Hamt(Default::default())
     }
@@ -85,11 +118,37 @@ where
     (hash.as_ref()[depth] % 4) as usize
 }
 
+struct PathWalker<'a> {
+    hash: &'a [u8; 32],
+    depth: usize,
+}
+
+impl<'a> PathWalker<'a> {
+    fn new(hash: &'a [u8; 32]) -> Self {
+        PathWalker { hash, depth: 0 }
+    }
+}
+
+impl<'a, C, A> Walker<C, A> for PathWalker<'a>
+where
+    C: Compound<A>,
+{
+    fn walk(&mut self, walk: microkelvin::Walk<C, A>) -> microkelvin::Step {
+        let slot = slot(self.hash, self.depth);
+        self.depth += 1;
+        match walk.child(slot) {
+            Child::Leaf(_) => Step::Found(slot),
+            Child::Node(_) => Step::Into(slot),
+            Child::Empty | Child::EndOfNode => Step::Abort,
+        }
+    }
+}
+
 impl<K, V, A> Hamt<K, V, A>
 where
     K: Eq + Canon,
     V: Canon,
-    A: Combine<Self, A> + Canon,
+    A: Annotation<KvPair<K, V>> + Canon,
 {
     /// Creates a new empty Hamt
     pub fn new() -> Self {
@@ -113,12 +172,15 @@ where
 
         match bucket.take() {
             Bucket::Empty => {
-                *bucket = Bucket::Leaf(KvPair(key, val));
+                *bucket = Bucket::Leaf(KvPair { key, val });
                 Ok(None)
             }
-            Bucket::Leaf(KvPair(old_key, old_val)) => {
+            Bucket::Leaf(KvPair {
+                key: old_key,
+                val: old_val,
+            }) => {
                 if key == old_key {
-                    *bucket = Bucket::Leaf(KvPair(key, val));
+                    *bucket = Bucket::Leaf(KvPair { key, val });
                     Ok(Some(old_val))
                 } else {
                     let mut new_node = Hamt::new();
@@ -126,12 +188,13 @@ where
 
                     new_node._insert(key, val, hash, depth + 1)?;
                     new_node._insert(old_key, old_val, old_hash, depth + 1)?;
-                    *bucket = Bucket::Node(Annotated::new(new_node));
+                    *bucket = Bucket::Node(Link::new(new_node));
                     Ok(None)
                 }
             }
             Bucket::Node(mut node) => {
-                let result = node.val_mut()?._insert(key, val, hash, depth + 1);
+                let result =
+                    node.compound_mut()?._insert(key, val, hash, depth + 1);
                 // since we moved the bucket with `take()`, we need to put it back.
                 *bucket = Bucket::Node(node);
                 result
@@ -146,7 +209,7 @@ where
             | [Bucket::Empty, leaf @ Bucket::Leaf(..), Bucket::Empty, Bucket::Empty]
             | [Bucket::Empty, Bucket::Empty, leaf @ Bucket::Leaf(..), Bucket::Empty]
             | [Bucket::Empty, Bucket::Empty, Bucket::Empty, leaf @ Bucket::Leaf(..)] => {
-                if let Bucket::Leaf(KvPair(key, val)) =
+                if let Bucket::Leaf(KvPair { key, val }) =
                     mem::replace(leaf, Bucket::Empty)
                 {
                     Some((key, val))
@@ -174,7 +237,10 @@ where
 
         match bucket.take() {
             Bucket::Empty => Ok(None),
-            Bucket::Leaf(KvPair(old_key, old_val)) => {
+            Bucket::Leaf(KvPair {
+                key: old_key,
+                val: old_val,
+            }) => {
                 if *key == old_key {
                     Ok(Some(old_val))
                 } else {
@@ -182,28 +248,18 @@ where
                 }
             }
 
-            Bucket::Node(mut annotated) => {
-                let mut node = annotated.val_mut()?;
+            Bucket::Node(mut link) => {
+                let mut node = link.compound_mut()?;
                 let result = node._remove(key, hash, depth + 1);
                 // since we moved the bucket with `take()`, we need to put it back.
                 if let Some((key, val)) = node.collapse() {
-                    *bucket = Bucket::Leaf(KvPair(key, val));
+                    *bucket = Bucket::Leaf(KvPair { key, val });
                 } else {
                     drop(node);
-                    *bucket = Bucket::Node(annotated);
+                    *bucket = Bucket::Node(link);
                 }
                 result
             }
-        }
-    }
-
-    #[cfg(test)]
-    fn correct_empty_state(&self) -> bool {
-        match self.0 {
-            [Bucket::Empty, Bucket::Empty, Bucket::Empty, Bucket::Empty] => {
-                true
-            }
-            _ => false,
         }
     }
 
@@ -212,14 +268,10 @@ where
         key: &K,
     ) -> Result<Option<impl Deref<Target = V> + 'a>, CanonError> {
         let hash = Id::new(key).hash();
-        let mut depth = 0;
-        Ok(Branch::path(self, || {
-            let ofs = slot(&hash, depth);
-            depth += 1;
-            ofs
-        })?
-        .filter(|branch| &(*branch).0 == key)
-        .map(|b| b.map_leaf(|leaf| &leaf.1)))
+
+        Ok(Branch::walk(self, PathWalker::new(&hash))?
+            .filter(|branch| &(*branch).key == key)
+            .map(|b| b.map_leaf(|leaf| &leaf.val)))
     }
 
     pub fn get_mut<'a>(
@@ -227,139 +279,8 @@ where
         key: &K,
     ) -> Result<Option<impl DerefMut<Target = V> + 'a>, CanonError> {
         let hash = Id::new(key).hash();
-        let mut depth = 0;
-        Ok(BranchMut::path(self, || {
-            let ofs = slot(&hash, depth);
-            depth += 1;
-            ofs
-        })?
-        .filter(|branch| &(*branch).0 == key)
-        .map(|b| b.map_leaf_mut(|leaf| &mut leaf.1)))
-    }
-}
-
-#[cfg(test)]
-#[macro_use]
-extern crate alloc;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloc::vec::Vec;
-    use microkelvin::{Cardinality, Nth};
-
-    #[test]
-    fn trivial() {
-        let mut hamt = Hamt::<u32, u32, ()>::new();
-        assert_eq!(hamt.remove(&0).unwrap(), None);
-    }
-
-    #[test]
-    fn replace() {
-        let mut hamt = Hamt::<u32, u32, ()>::new();
-        assert_eq!(hamt.insert(0, 38).unwrap(), None);
-        assert_eq!(hamt.insert(0, 0).unwrap(), Some(38));
-    }
-
-    #[test]
-    fn multiple() {
-        let n = 1024;
-
-        let mut hamt = Hamt::<_, _, ()>::new();
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-        }
-
-        for i in 0..n {
-            assert_eq!(hamt.remove(&i).unwrap(), Some(i));
-        }
-
-        assert!(hamt.correct_empty_state());
-    }
-
-    #[test]
-    fn insert_get() {
-        let n = 1024;
-
-        let mut hamt = Hamt::<_, _, ()>::new();
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-        }
-
-        for i in 0..n {
-            assert_eq!(*hamt.get(&i).unwrap().unwrap(), i);
-        }
-    }
-
-    #[test]
-    fn nth() {
-        let n: u64 = 1024;
-
-        let mut hamt = Hamt::<_, _, Cardinality>::new();
-
-        let mut result: Vec<u64> = vec![];
-        let mut sorted = vec![];
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-        }
-
-        for i in 0..n {
-            let res = hamt.nth(i).unwrap();
-            result.push(res.unwrap().1);
-            sorted.push(i);
-        }
-
-        result.sort();
-
-        assert_eq!(result, sorted);
-    }
-
-    #[test]
-    fn insert_get_mut() {
-        let n = 1024;
-
-        let mut hamt = Hamt::<_, _, ()>::new();
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-        }
-
-        for i in 0..n {
-            *hamt.get_mut(&i).unwrap().unwrap() += 1;
-        }
-
-        for i in 0..n {
-            assert_eq!(*hamt.get(&i).unwrap().unwrap(), i + 1);
-        }
-    }
-
-    #[test]
-    fn iterate() {
-        let n: u64 = 1024;
-
-        use microkelvin::{Cardinality, Nth};
-
-        let mut hamt = Hamt::<_, _, Cardinality>::new();
-
-        let mut reference = vec![];
-        let mut from_iter = vec![];
-
-        for i in 0..n {
-            hamt.insert(i, i).unwrap();
-            reference.push(i);
-        }
-
-        for leaf in hamt.nth(0).unwrap().unwrap() {
-            let val = leaf.unwrap().1;
-            from_iter.push(val);
-        }
-
-        reference.sort_unstable();
-        from_iter.sort_unstable();
-
-        assert_eq!(from_iter, reference)
+        Ok(BranchMut::walk(self, PathWalker::new(&hash))?
+            .filter(|branch| &(*branch).key == key)
+            .map(|b| b.map_leaf(|leaf| &mut leaf.val)))
     }
 }

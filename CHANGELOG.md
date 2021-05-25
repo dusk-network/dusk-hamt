@@ -7,28 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1]
+## [0.3.2] - 2021-06-24
+
+### Added
+- Add microkelvin persistance feature and integration
+
+### Changed
+- Change tree traversal from using `path` to using `PathWalker`
+
+## [0.3.1] - 2021-05-26
 
 ### Added
 - Add type alias `Map` [#6]
 
-## [0.3.0]
+## [0.3.0] - 2021-05-25
 
 ### Changed
 - Change library to be `no_std`
 
-## [0.2.0]
+## [0.2.0] - 2021-04-27
 
 ### Changed
 
 - Change microkelvin version to 0.7
 
-## [0.1.0]
+## [0.1.0] - 2021-01-27
 
 Initial release
 
 [#6]: https://github.com/dusk-network/dusk-hamt/issues/6
-[Unreleased]: https://github.com/dusk-network/dusk-hamt/compare/v-0.3.0...HEAD
+[Unreleased]: https://github.com/dusk-network/dusk-hamt/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/dusk-network/dusk-hamt/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/dusk-network/dusk-hamt/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/dusk-network/dusk-hamt/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dusk-network/dusk-hamt/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dusk-network/dusk-hamt/releases/tag/v0.1.0
