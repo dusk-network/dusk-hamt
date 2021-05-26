@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Add type alias `Map` [#6]
+
 ## [0.3.0]
 
 ### Changed
@@ -22,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release
 
+[#6]: https://github.com/dusk-network/dusk-hamt/issues/6
 [Unreleased]: https://github.com/dusk-network/dusk-hamt/compare/v-0.3.0...HEAD
 [0.3.0]: https://github.com/dusk-network/dusk-hamt/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dusk-network/dusk-hamt/compare/v0.1.0...v0.2.0
