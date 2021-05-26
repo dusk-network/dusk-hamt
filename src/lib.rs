@@ -30,6 +30,8 @@ enum Bucket<K, V, A> {
 #[derive(Clone, Canon, Debug)]
 pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4]);
 
+pub type Map<K, V> = Hamt<K, V, ()>;
+
 impl<K, V, A> Compound<A> for Hamt<K, V, A>
 where
     K: Canon,
