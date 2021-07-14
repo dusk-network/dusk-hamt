@@ -9,9 +9,9 @@ repository = "https://github.com/dusk-network/dusk-hamt"
 keywords = ["merkle", "datastructure", "hamt"]
 
 [dependencies]
-microkelvin = "0.9"
+microkelvin = "0.10.0-rc"
 canonical = "0.6"
 canonical_derive = "0.6"
 
 [features]
-persistance = ["microkelvin/persistance"]
+persistence = ["microkelvin/persistence"]
