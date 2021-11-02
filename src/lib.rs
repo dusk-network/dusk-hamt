@@ -13,7 +13,8 @@ use core::ops::DerefMut;
 
 use microkelvin::{
     AWrap, Annotation, ArchivedChild, ArchivedCompound, Child, ChildMut,
-    Compound, Keyed, Link, MappedBranch, Slot, Slots, Step, Walker,
+    Compound, Keyed, Link, MappedBranch, Primitive, Slot, Slots, Step, Storage,
+    StorageSerializer, Walker,
 };
 use rkyv::{Archive, Deserialize, Infallible, Serialize};
 use seahash::SeaHasher;
@@ -57,13 +58,26 @@ where
 }
 
 #[derive(Clone, Debug, Serialize, Archive, Deserialize)]
+#[archive(bound(serialize = "
+  K: Serialize<Storage>,
+  V: Serialize<Storage>,
+  A: Annotation<KvPair<K, V>>,
+  __S: StorageSerializer"))]
+#[archive(bound(deserialize = "
+  A: Archive + Clone,
+  K: Archive,
+  K::Archived: Deserialize<K, __D>,
+  V: Archive,
+  V::Archived: Deserialize<V, __D>,
+  A::Archived: Deserialize<A, __D>,
+  __D: Sized"))]
 pub enum Bucket<K, V, A>
 where
     A: Annotation<KvPair<K, V>>,
 {
     Empty,
     Leaf(KvPair<K, V>),
-    Node(Link<Hamt<K, V, A>, A>),
+    Node(#[omit_bounds] Link<Hamt<K, V, A>, A>),
 }
 
 #[derive(Clone, Debug, Archive, Serialize, Deserialize)]
@@ -97,6 +111,27 @@ where
             Some(Bucket::Node(ref mut nd)) => ChildMut::Node(nd),
             None => ChildMut::EndOfNode,
         }
+    }
+}
+
+impl<K, V, A> ArchivedHamt<K, V, A>
+where
+    K: Primitive + Hash + Eq,
+    V: Archive,
+    A: Annotation<KvPair<K, V>>,
+{
+    pub fn get<'a>(
+        &'a self,
+        key: &K,
+    ) -> Option<MappedBranch<Hamt<K, V, A>, A, V>> {
+        self.walk(PathWalker::new(hash(key)))
+            .filter(|branch| branch.leaf().key() == key)
+            .map(|b| {
+                b.map_leaf(|leaf| match leaf {
+                    AWrap::Memory(kv) => AWrap::Memory(&kv.val),
+                    AWrap::Archived(kv) => AWrap::Archived(&kv.val),
+                })
+            })
     }
 }
 
@@ -174,6 +209,7 @@ impl<'a, C, A> Walker<C, A> for PathWalker
 where
     C: Compound<A> + Archive,
     C::Archived: ArchivedCompound<C, A>,
+    C::Leaf: Archive,
     A: Annotation<C::Leaf>,
 {
     fn walk(&mut self, slots: impl Slots<C, A>) -> microkelvin::Step {

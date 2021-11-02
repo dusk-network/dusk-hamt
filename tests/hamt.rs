@@ -153,7 +153,7 @@ fn iterate() {
         from_iter.push(val.into());
     }
 
-    dbg!((&reference, &gotten, &from_iter));
+    assert_eq!(from_iter, from_nth);
 
     reference.sort_unstable();
     from_iter.sort_unstable();
