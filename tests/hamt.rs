@@ -74,8 +74,7 @@ fn insert_get_immut() {
 fn nth() {
     let n: u64 = 1024;
 
-    let mut hamt =
-        Hamt::<LittleEndian<u64>, LittleEndian<u64>, Cardinality>::new();
+    let mut hamt = Hamt::<LittleEndian<u64>, u64, Cardinality>::new();
 
     let mut result: Vec<LittleEndian<u64>> = vec![];
     let mut sorted = vec![];
