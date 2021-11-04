@@ -7,34 +7,80 @@
 #![no_std]
 
 //! Hamt
+use core::hash::{Hash, Hasher};
 use core::mem;
-use core::ops::{Deref, DerefMut};
-
-use canonical::{Canon, CanonError, Id};
-use canonical_derive::Canon;
+use core::ops::DerefMut;
 
 use microkelvin::{
-    Annotation, Branch, BranchMut, Child, ChildMut, Compound, GenericChild,
-    GenericTree, Link, Step, Walker,
+    AWrap, Annotation, ArchivedChild, ArchivedCompound, Child, ChildMut,
+    Compound, Keyed, Link, MappedBranch, Primitive, Slot, Slots, Step, Storage,
+    StorageSerializer, Walker,
 };
+use rkyv::{Archive, Deserialize, Infallible, Serialize};
+use seahash::SeaHasher;
 
-#[derive(Clone, Canon, Debug)]
+#[derive(Clone, Debug, Archive, Serialize, Deserialize)]
 pub struct KvPair<K, V> {
-    pub key: K,
-    pub val: V,
+    key: K,
+    val: V,
 }
 
-#[derive(Clone, Canon, Debug)]
-enum Bucket<K, V, A>
+impl<K, V> KvPair<K, V> {
+    pub fn value(&self) -> &V {
+        &self.val
+    }
+}
+
+impl<K, V> ArchivedKvPair<K, V>
+where
+    K: Archive,
+    V: Archive,
+{
+    pub fn value(&self) -> &V::Archived {
+        &self.val
+    }
+}
+
+impl<K, V> Keyed<K> for KvPair<K, V> {
+    fn key(&self) -> &K {
+        &self.key
+    }
+}
+
+impl<K, V> Keyed<K> for ArchivedKvPair<K, V>
+where
+    K: Archive<Archived = K>,
+    V: Archive,
+{
+    fn key(&self) -> &K {
+        &self.key
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Archive, Deserialize)]
+#[archive(bound(serialize = "
+  K: Serialize<Storage>,
+  V: Serialize<Storage>,
+  A: Annotation<KvPair<K, V>>,
+  __S: StorageSerializer"))]
+#[archive(bound(deserialize = "
+  A: Archive + Clone,
+  K: Archive,
+  K::Archived: Deserialize<K, __D>,
+  V: Archive,
+  V::Archived: Deserialize<V, __D>,
+  A::Archived: Deserialize<A, __D>,
+  __D: Sized"))]
+pub enum Bucket<K, V, A>
 where
     A: Annotation<KvPair<K, V>>,
 {
     Empty,
     Leaf(KvPair<K, V>),
-    Node(Link<Hamt<K, V, A>, A>),
+    Node(#[omit_bounds] Link<Hamt<K, V, A>, A>),
 }
 
-#[derive(Clone, Canon, Debug)]
+#[derive(Clone, Debug, Archive, Serialize, Deserialize)]
 pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4])
 where
     A: Annotation<KvPair<K, V>>;
@@ -43,10 +89,9 @@ pub type Map<K, V> = Hamt<K, V, ()>;
 
 impl<K, V, A> Compound<A> for Hamt<K, V, A>
 where
+    K: Archive,
+    V: Archive,
     A: Annotation<KvPair<K, V>>,
-    K: Canon,
-    V: Canon,
-    A: Canon,
 {
     type Leaf = KvPair<K, V>;
 
@@ -67,19 +112,42 @@ where
             None => ChildMut::EndOfNode,
         }
     }
+}
 
-    fn from_generic(generic: &GenericTree) -> Result<Self, CanonError> {
-        let mut s = Self::default();
-        for (i, child) in generic.children().iter().enumerate() {
-            match child {
-                GenericChild::Empty => (),
-                GenericChild::Leaf(leaf) => s.0[i] = Bucket::Leaf(leaf.cast()?),
-                GenericChild::Link(id, a) => {
-                    s.0[i] = Bucket::Node(Link::new_persisted(*id, a.cast()?));
-                }
-            }
+impl<K, V, A> ArchivedHamt<K, V, A>
+where
+    K: Primitive + Hash + Eq,
+    V: Archive,
+    A: Annotation<KvPair<K, V>>,
+{
+    pub fn get<'a>(
+        &'a self,
+        key: &K,
+    ) -> Option<MappedBranch<Hamt<K, V, A>, A, V>> {
+        self.walk(PathWalker::new(hash(key)))
+            .filter(|branch| branch.leaf().key() == key)
+            .map(|b| {
+                b.map_leaf(|leaf| match leaf {
+                    AWrap::Memory(kv) => AWrap::Memory(&kv.val),
+                    AWrap::Archived(kv) => AWrap::Archived(&kv.val),
+                })
+            })
+    }
+}
+
+impl<K, V, A> ArchivedCompound<Hamt<K, V, A>, A> for ArchivedHamt<K, V, A>
+where
+    K: Archive,
+    V: Archive,
+    A: Annotation<KvPair<K, V>>,
+{
+    fn child(&self, ofs: usize) -> ArchivedChild<Hamt<K, V, A>, A> {
+        match self.0.get(ofs) {
+            Some(ArchivedBucket::Leaf(l)) => ArchivedChild::Leaf(l),
+            Some(ArchivedBucket::Node(n)) => ArchivedChild::Node(n),
+            Some(ArchivedBucket::Empty) => ArchivedChild::Empty,
+            None => ArchivedChild::EndOfNode,
         }
-        Ok(s)
     }
 }
 
@@ -110,70 +178,85 @@ where
     }
 }
 
-fn slot<H>(hash: &H, depth: usize) -> usize
-where
-    H: AsRef<[u8]>,
-{
-    // calculate the slot for key at depth x
-    (hash.as_ref()[depth] % 4) as usize
+#[inline(always)]
+fn slot(from: u64, depth: usize) -> usize {
+    let derived = hash(&(from + depth as u64));
+    (derived % 4) as usize
 }
 
-struct PathWalker<'a> {
-    hash: &'a [u8; 32],
+#[inline(always)]
+fn hash<T>(t: &T) -> u64
+where
+    T: Hash,
+{
+    let mut hasher = SeaHasher::new();
+    t.hash(&mut hasher);
+    hasher.finish()
+}
+
+struct PathWalker {
+    digest: u64,
     depth: usize,
 }
 
-impl<'a> PathWalker<'a> {
-    fn new(hash: &'a [u8; 32]) -> Self {
-        PathWalker { hash, depth: 0 }
+impl PathWalker {
+    fn new(digest: u64) -> Self {
+        PathWalker { digest, depth: 0 }
     }
 }
 
-impl<'a, C, A> Walker<C, A> for PathWalker<'a>
+impl<'a, C, A> Walker<C, A> for PathWalker
 where
-    C: Compound<A>,
+    C: Compound<A> + Archive,
+    C::Archived: ArchivedCompound<C, A>,
+    C::Leaf: Archive,
+    A: Annotation<C::Leaf>,
 {
-    fn walk(&mut self, walk: microkelvin::Walk<C, A>) -> microkelvin::Step {
-        let slot = slot(self.hash, self.depth);
+    fn walk(&mut self, slots: impl Slots<C, A>) -> microkelvin::Step {
+        let slot = slot(self.digest, self.depth);
         self.depth += 1;
-        match walk.child(slot) {
-            Child::Leaf(_) => Step::Found(slot),
-            Child::Node(_) => Step::Into(slot),
-            Child::Empty | Child::EndOfNode => Step::Abort,
+        match slots.slot(slot) {
+            Slot::Leaf(_) | Slot::ArchivedLeaf(_) | Slot::Annotation(_) => {
+                Step::Found(slot)
+            }
+            Slot::Empty | Slot::End => Step::Abort,
         }
     }
 }
 
 impl<K, V, A> Hamt<K, V, A>
 where
-    K: Eq + Canon,
-    V: Canon,
-    A: Annotation<KvPair<K, V>> + Canon,
+    K: Archive<Archived = K> + Clone + Eq + Hash,
+    V: Archive + Clone,
+    A: Annotation<KvPair<K, V>>,
+    Self: Archive,
+    <Hamt<K, V, A> as Archive>::Archived:
+        ArchivedCompound<Self, A> + Deserialize<Self, Infallible>,
 {
     /// Creates a new empty Hamt
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn insert(&mut self, key: K, val: V) -> Result<Option<V>, CanonError> {
-        let hash = Id::new(&key).hash();
-        self._insert(key, val, hash, 0)
+    pub fn insert(&mut self, key: K, val: V) -> Option<V> {
+        let digest = hash(&key);
+        self._insert(key, val, digest, 0)
     }
 
     fn _insert(
         &mut self,
         key: K,
         val: V,
-        hash: [u8; 32],
+        digest: u64,
         depth: usize,
-    ) -> Result<Option<V>, CanonError> {
-        let slot = slot(&hash, depth);
+    ) -> Option<V> {
+        let slot = slot(digest, depth);
         let bucket = &mut self.0[slot];
 
         match bucket.take() {
             Bucket::Empty => {
                 *bucket = Bucket::Leaf(KvPair { key, val });
-                Ok(None)
+                None
             }
             Bucket::Leaf(KvPair {
                 key: old_key,
@@ -181,20 +264,20 @@ where
             }) => {
                 if key == old_key {
                     *bucket = Bucket::Leaf(KvPair { key, val });
-                    Ok(Some(old_val))
+                    Some(old_val)
                 } else {
                     let mut new_node = Hamt::new();
-                    let old_hash = Id::new(&old_key).hash();
+                    let old_digest = hash(&old_key);
 
-                    new_node._insert(key, val, hash, depth + 1)?;
-                    new_node._insert(old_key, old_val, old_hash, depth + 1)?;
+                    new_node._insert(key, val, digest, depth + 1);
+                    new_node._insert(old_key, old_val, old_digest, depth + 1);
                     *bucket = Bucket::Node(Link::new(new_node));
-                    Ok(None)
+                    None
                 }
             }
             Bucket::Node(mut node) => {
                 let result =
-                    node.compound_mut()?._insert(key, val, hash, depth + 1);
+                    node.inner_mut()._insert(key, val, digest, depth + 1);
                 // since we moved the bucket with `take()`, we need to put it back.
                 *bucket = Bucket::Node(node);
                 result
@@ -221,36 +304,33 @@ where
         }
     }
 
-    pub fn remove(&mut self, key: &K) -> Result<Option<V>, CanonError> {
-        let hash = Id::new(key).hash();
-        self._remove(key, hash, 0)
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        let mut hasher = SeaHasher::new();
+        key.hash(&mut hasher);
+        let digest = hasher.finish();
+        self._remove(key, digest, 0)
     }
 
-    fn _remove(
-        &mut self,
-        key: &K,
-        hash: [u8; 32],
-        depth: usize,
-    ) -> Result<Option<V>, CanonError> {
-        let slot = slot(&hash, depth);
+    fn _remove(&mut self, key: &K, digest: u64, depth: usize) -> Option<V> {
+        let slot = slot(digest, depth);
         let bucket = &mut self.0[slot];
 
         match bucket.take() {
-            Bucket::Empty => Ok(None),
+            Bucket::Empty => None,
             Bucket::Leaf(KvPair {
                 key: old_key,
                 val: old_val,
             }) => {
                 if *key == old_key {
-                    Ok(Some(old_val))
+                    Some(old_val)
                 } else {
-                    Ok(None)
+                    None
                 }
             }
 
             Bucket::Node(mut link) => {
-                let mut node = link.compound_mut()?;
-                let result = node._remove(key, hash, depth + 1);
+                let node = link.inner_mut();
+                let result = node._remove(key, digest, depth + 1);
                 // since we moved the bucket with `take()`, we need to put it back.
                 if let Some((key, val)) = node.collapse() {
                     *bucket = Bucket::Leaf(KvPair { key, val });
@@ -263,24 +343,24 @@ where
         }
     }
 
-    pub fn get<'a>(
-        &'a self,
-        key: &K,
-    ) -> Result<Option<impl Deref<Target = V> + 'a>, CanonError> {
-        let hash = Id::new(key).hash();
-
-        Ok(Branch::walk(self, PathWalker::new(&hash))?
-            .filter(|branch| &(*branch).key == key)
-            .map(|b| b.map_leaf(|leaf| &leaf.val)))
+    pub fn get<'a>(&'a self, key: &K) -> Option<MappedBranch<Self, A, V>> {
+        self.walk(PathWalker::new(hash(key)))
+            .filter(|branch| branch.leaf().key() == key)
+            .map(|b| {
+                b.map_leaf(|leaf| match leaf {
+                    AWrap::Memory(kv) => AWrap::Memory(&kv.val),
+                    AWrap::Archived(kv) => AWrap::Archived(&kv.val),
+                })
+            })
     }
 
     pub fn get_mut<'a>(
         &'a mut self,
         key: &K,
-    ) -> Result<Option<impl DerefMut<Target = V> + 'a>, CanonError> {
-        let hash = Id::new(key).hash();
-        Ok(BranchMut::walk(self, PathWalker::new(&hash))?
+    ) -> Option<impl DerefMut<Target = V> + 'a> {
+        let hash = hash(key);
+        self.walk_mut(PathWalker::new(hash))
             .filter(|branch| &(*branch).key == key)
-            .map(|b| b.map_leaf(|leaf| &mut leaf.val)))
+            .map(|b| b.map_leaf(|leaf| &mut leaf.val))
     }
 }
