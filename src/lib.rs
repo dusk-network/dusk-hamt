@@ -7,16 +7,16 @@
 #![no_std]
 
 //! Hamt
+use core::borrow::Borrow;
 use core::hash::{Hash, Hasher};
 use core::mem;
-use core::ops::DerefMut;
 
 use microkelvin::{
-    AWrap, Annotation, ArchivedChild, ArchivedCompound, Child, ChildMut,
-    Compound, Keyed, Link, MappedBranch, Primitive, Slot, Slots, Step, Storage,
-    StorageSerializer, Walker,
+    Annotation, ArchivedChild, ArchivedCompound, Child, ChildMut, Compound,
+    Discriminant, Keyed, Link, MappedBranch, MappedBranchMut, MaybeArchived,
+    Step, Store, Stored, Walkable, Walker,
 };
-use rkyv::{Archive, Deserialize, Infallible, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 use seahash::SeaHasher;
 
 #[derive(Clone, Debug, Archive, Serialize, Deserialize)]
@@ -57,121 +57,162 @@ where
     }
 }
 
-#[derive(Clone, Debug, Serialize, Archive, Deserialize)]
-#[archive(bound(serialize = "
-  K: Serialize<Storage>,
-  V: Serialize<Storage>,
-  A: Annotation<KvPair<K, V>>,
-  __S: StorageSerializer"))]
-#[archive(bound(deserialize = "
-  A: Archive + Clone,
-  K: Archive,
-  K::Archived: Deserialize<K, __D>,
-  V: Archive,
-  V::Archived: Deserialize<V, __D>,
-  A::Archived: Deserialize<A, __D>,
-  __D: Sized"))]
-pub enum Bucket<K, V, A>
+pub trait Lookup<C, K, V, A, S>
 where
+    C: Compound<A, S, Leaf = KvPair<K, V>>,
+    K: Archive<Archived = K>,
+    V: Archive,
+    S: Store,
+{
+    fn get<'a>(
+        &'a self,
+        key: &K,
+    ) -> Option<MappedBranch<'a, C, A, S, MaybeArchived<V>>>;
+
+    fn get_mut<'a>(
+        &'a mut self,
+        key: &K,
+    ) -> Option<MappedBranchMut<'a, C, A, S, V>>;
+}
+
+impl<K, V, A, S> Lookup<Self, K, V, A, S> for Hamt<K, V, A, S>
+where
+    K: Archive<Archived = K> + Hash,
+    V: Archive,
     A: Annotation<KvPair<K, V>>,
+    S: Store,
+{
+    fn get<'a>(
+        &'a self,
+        key: &K,
+    ) -> Option<MappedBranch<'a, Self, A, S, MaybeArchived<V>>> {
+        self.walk(PathWalker::new(hash(key))).map(|branch| {
+            branch.map_leaf(|kv| match kv {
+                MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
+                MaybeArchived::Archived(kv) => {
+                    MaybeArchived::Archived(kv.value())
+                }
+            })
+        })
+    }
+
+    fn get_mut(&mut self, _key: &K) -> Option<MappedBranchMut<Self, A, S, V>> {
+        todo!()
+    }
+}
+
+impl<C, K, V, A, S> Lookup<C, K, V, A, S> for Stored<C, S>
+where
+    K: Archive<Archived = K>,
+    V: Archive,
+    C: Compound<A, S, Leaf = KvPair<K, V>>,
+    S: Store,
+{
+    fn get(&self, _key: &K) -> Option<MappedBranch<C, A, S, MaybeArchived<V>>> {
+        todo!()
+    }
+
+    fn get_mut(&mut self, _key: &K) -> Option<MappedBranchMut<C, A, S, V>> {
+        todo!()
+    }
+}
+
+#[derive(Clone, Serialize, Archive, Deserialize)]
+#[archive(bound(serialize = "
+  A: Archive + Clone + Annotation<KvPair<K, V>>,
+  K: Archive,
+  V: Archive,
+  S: Store<Storage = __S>,"))]
+#[archive(bound(deserialize = "
+  KvPair<K, V>: Archive + Clone,
+  <KvPair<K, V> as Archive>::Archived: Deserialize<KvPair<K, V>, S>,
+  A: Clone + Annotation<KvPair<K, V>>,
+  for<'a> &'a mut __D: Borrow<S>,
+  __D: Store,"))]
+pub enum Bucket<K, V, A, S>
+where
+    S: Store,
 {
     Empty,
     Leaf(KvPair<K, V>),
-    Node(#[omit_bounds] Link<Hamt<K, V, A>, A>),
+    Node(#[omit_bounds] Link<Hamt<K, V, A, S>, A, S>),
 }
 
-#[derive(Clone, Debug, Archive, Serialize, Deserialize)]
-pub struct Hamt<K, V, A>([Bucket<K, V, A>; 4])
+#[derive(Clone, Archive, Serialize, Deserialize)]
+pub struct Hamt<K, V, A, S>([Bucket<K, V, A, S>; 4])
 where
-    A: Annotation<KvPair<K, V>>;
+    S: Store;
 
-pub type Map<K, V> = Hamt<K, V, ()>;
-
-impl<K, V, A> Compound<A> for Hamt<K, V, A>
+impl<K, V, A, S> Compound<A, S> for Hamt<K, V, A, S>
 where
+    S: Store,
     K: Archive,
     V: Archive,
     A: Annotation<KvPair<K, V>>,
 {
     type Leaf = KvPair<K, V>;
 
-    fn child(&self, ofs: usize) -> Child<Self, A> {
+    fn child(&self, ofs: usize) -> Child<Self, A, S> {
         match self.0.get(ofs) {
             Some(Bucket::Empty) => Child::Empty,
             Some(Bucket::Leaf(ref kv)) => Child::Leaf(kv),
-            Some(Bucket::Node(ref nd)) => Child::Node(nd),
-            None => Child::EndOfNode,
+            Some(Bucket::Node(ref nd)) => Child::Link(nd),
+            None => Child::End,
         }
     }
 
-    fn child_mut(&mut self, ofs: usize) -> ChildMut<Self, A> {
+    fn child_mut(&mut self, ofs: usize) -> ChildMut<Self, A, S> {
         match self.0.get_mut(ofs) {
             Some(Bucket::Empty) => ChildMut::Empty,
             Some(Bucket::Leaf(ref mut kv)) => ChildMut::Leaf(kv),
-            Some(Bucket::Node(ref mut nd)) => ChildMut::Node(nd),
-            None => ChildMut::EndOfNode,
+            Some(Bucket::Node(ref mut nd)) => ChildMut::Link(nd),
+            None => ChildMut::End,
         }
     }
 }
 
-impl<K, V, A> ArchivedHamt<K, V, A>
-where
-    K: Primitive + Hash + Eq,
-    V: Archive,
-    A: Annotation<KvPair<K, V>>,
-{
-    pub fn get<'a>(
-        &'a self,
-        key: &K,
-    ) -> Option<MappedBranch<Hamt<K, V, A>, A, V>> {
-        self.walk(PathWalker::new(hash(key)))
-            .filter(|branch| branch.leaf().key() == key)
-            .map(|b| {
-                b.map_leaf(|leaf| match leaf {
-                    AWrap::Memory(kv) => AWrap::Memory(&kv.val),
-                    AWrap::Archived(kv) => AWrap::Archived(&kv.val),
-                })
-            })
-    }
-}
-
-impl<K, V, A> ArchivedCompound<Hamt<K, V, A>, A> for ArchivedHamt<K, V, A>
+impl<K, V, A, S> ArchivedCompound<Hamt<K, V, A, S>, A, S>
+    for ArchivedHamt<K, V, A, S>
 where
     K: Archive,
     V: Archive,
     A: Annotation<KvPair<K, V>>,
+    S: Store,
 {
-    fn child(&self, ofs: usize) -> ArchivedChild<Hamt<K, V, A>, A> {
+    fn child(&self, ofs: usize) -> ArchivedChild<Hamt<K, V, A, S>, A, S> {
         match self.0.get(ofs) {
             Some(ArchivedBucket::Leaf(l)) => ArchivedChild::Leaf(l),
-            Some(ArchivedBucket::Node(n)) => ArchivedChild::Node(n),
+            Some(ArchivedBucket::Node(n)) => ArchivedChild::Link(n),
             Some(ArchivedBucket::Empty) => ArchivedChild::Empty,
-            None => ArchivedChild::EndOfNode,
+            None => ArchivedChild::End,
         }
     }
 }
 
-impl<K, V, A> Bucket<K, V, A>
+impl<K, V, A, S> Bucket<K, V, A, S>
 where
     A: Annotation<KvPair<K, V>>,
+    S: Store,
 {
     fn take(&mut self) -> Self {
         mem::replace(self, Bucket::Empty)
     }
 }
 
-impl<K, V, A> Default for Bucket<K, V, A>
+impl<K, V, A, S> Default for Bucket<K, V, A, S>
 where
     A: Annotation<KvPair<K, V>>,
+    S: Store,
 {
     fn default() -> Self {
         Bucket::Empty
     }
 }
 
-impl<K, V, A> Default for Hamt<K, V, A>
+impl<K, V, A, S> Default for Hamt<K, V, A, S>
 where
     A: Annotation<KvPair<K, V>>,
+    S: Store,
 {
     fn default() -> Self {
         Hamt(Default::default())
@@ -194,7 +235,8 @@ where
     hasher.finish()
 }
 
-struct PathWalker {
+/// A walker
+pub struct PathWalker {
     digest: u64,
     depth: usize,
 }
@@ -203,35 +245,44 @@ impl PathWalker {
     fn new(digest: u64) -> Self {
         PathWalker { digest, depth: 0 }
     }
-}
 
-impl<'a, C, A> Walker<C, A> for PathWalker
-where
-    C: Compound<A> + Archive,
-    C::Archived: ArchivedCompound<C, A>,
-    C::Leaf: Archive,
-    A: Annotation<C::Leaf>,
-{
-    fn walk(&mut self, slots: impl Slots<C, A>) -> microkelvin::Step {
-        let slot = slot(self.digest, self.depth);
-        self.depth += 1;
-        match slots.slot(slot) {
-            Slot::Leaf(_) | Slot::ArchivedLeaf(_) | Slot::Annotation(_) => {
-                Step::Found(slot)
-            }
-            Slot::Empty | Slot::End => Step::Abort,
+    fn from_key<K: Hash>(key: &K) -> Self {
+        PathWalker {
+            digest: hash(key),
+            depth: 0,
         }
     }
 }
 
-impl<K, V, A> Hamt<K, V, A>
+impl<'a, C, A, S> Walker<C, A, S> for PathWalker
+where
+    C: Compound<A, S> + Archive,
+    C::Archived: ArchivedCompound<C, A, S>,
+    C::Leaf: Archive,
+    A: Annotation<C::Leaf>,
+    S: Store,
+{
+    fn walk(&mut self, level: impl Walkable<C, A, S>) -> Step {
+        let slot = slot(self.digest, self.depth);
+        self.depth += 1;
+        match level.probe(slot) {
+            Discriminant::Leaf(_) | Discriminant::Annotation(_) => {
+                Step::Found(slot)
+            }
+            Discriminant::Empty | Discriminant::End => Step::Abort,
+        }
+    }
+}
+
+impl<K, V, A, S> Hamt<K, V, A, S>
 where
     K: Archive<Archived = K> + Clone + Eq + Hash,
     V: Archive + Clone,
     A: Annotation<KvPair<K, V>>,
     Self: Archive,
-    <Hamt<K, V, A> as Archive>::Archived:
-        ArchivedCompound<Self, A> + Deserialize<Self, Infallible>,
+    <Hamt<K, V, A, S> as Archive>::Archived:
+        ArchivedCompound<Self, A, S> + Deserialize<Self, S>,
+    S: Store,
 {
     /// Creates a new empty Hamt
     pub fn new() -> Self {
@@ -341,26 +392,5 @@ where
                 result
             }
         }
-    }
-
-    pub fn get<'a>(&'a self, key: &K) -> Option<MappedBranch<Self, A, V>> {
-        self.walk(PathWalker::new(hash(key)))
-            .filter(|branch| branch.leaf().key() == key)
-            .map(|b| {
-                b.map_leaf(|leaf| match leaf {
-                    AWrap::Memory(kv) => AWrap::Memory(&kv.val),
-                    AWrap::Archived(kv) => AWrap::Archived(&kv.val),
-                })
-            })
-    }
-
-    pub fn get_mut<'a>(
-        &'a mut self,
-        key: &K,
-    ) -> Option<impl DerefMut<Target = V> + 'a> {
-        let hash = hash(key);
-        self.walk_mut(PathWalker::new(hash))
-            .filter(|branch| &(*branch).key == key)
-            .map(|b| b.map_leaf(|leaf| &mut leaf.val))
     }
 }

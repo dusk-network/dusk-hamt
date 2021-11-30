@@ -4,33 +4,31 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
-use dusk_hamt::Hamt;
-use microkelvin::Portal;
+use dusk_hamt::{Hamt, Lookup};
+use microkelvin::{BranchRef, HostStore, Store};
 use rkyv::rend::LittleEndian;
 
 #[test]
 fn persist_across_threads() {
     let n: u64 = 1024;
 
-    let mut hamt = Hamt::<LittleEndian<u64>, u64, ()>::new();
+    let store = HostStore::new();
+
+    let mut hamt = Hamt::<LittleEndian<u64>, u64, (), _>::new();
 
     for i in 0..n {
         let le: LittleEndian<u64> = i.into();
         hamt.insert(le, i + 1);
     }
 
-    let persisted = Portal::put(&hamt);
+    let stored = store.put(&hamt);
 
     // it should now be available from other threads
 
     std::thread::spawn(move || {
-        let restored = Portal::get(persisted);
-
         for i in 0..n {
             let le: LittleEndian<u64> = i.into();
-            let branch = restored.get(&le).expect("Some(branch)");
-            let r = branch.leaf();
-            assert_eq!(r, i + 1);
+            assert_eq!(*stored.get(&le).unwrap().leaf(), i + 1);
         }
     })
     .join()

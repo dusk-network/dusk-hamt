@@ -9,6 +9,6 @@ repository = "https://github.com/dusk-network/dusk-hamt"
 keywords = ["merkle", "datastructure", "hamt"]
 
 [dependencies]
-microkelvin = "0.11.0-rc"
+microkelvin = { path = "../microkelvin" }
 rkyv = "0.7.19"
 seahash = "4.1.0"
