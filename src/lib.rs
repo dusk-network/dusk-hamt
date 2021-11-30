@@ -29,6 +29,10 @@ impl<K, V> KvPair<K, V> {
     pub fn value(&self) -> &V {
         &self.val
     }
+
+    pub fn value_mut(&mut self) -> &mut V {
+        &mut self.val
+    }
 }
 
 impl<K, V> ArchivedKvPair<K, V>
@@ -54,66 +58,6 @@ where
 {
     fn key(&self) -> &K {
         &self.key
-    }
-}
-
-pub trait Lookup<C, K, V, A, S>
-where
-    C: Compound<A, S, Leaf = KvPair<K, V>>,
-    K: Archive<Archived = K>,
-    V: Archive,
-    S: Store,
-{
-    fn get<'a>(
-        &'a self,
-        key: &K,
-    ) -> Option<MappedBranch<'a, C, A, S, MaybeArchived<V>>>;
-
-    fn get_mut<'a>(
-        &'a mut self,
-        key: &K,
-    ) -> Option<MappedBranchMut<'a, C, A, S, V>>;
-}
-
-impl<K, V, A, S> Lookup<Self, K, V, A, S> for Hamt<K, V, A, S>
-where
-    K: Archive<Archived = K> + Hash,
-    V: Archive,
-    A: Annotation<KvPair<K, V>>,
-    S: Store,
-{
-    fn get<'a>(
-        &'a self,
-        key: &K,
-    ) -> Option<MappedBranch<'a, Self, A, S, MaybeArchived<V>>> {
-        self.walk(PathWalker::new(hash(key))).map(|branch| {
-            branch.map_leaf(|kv| match kv {
-                MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
-                MaybeArchived::Archived(kv) => {
-                    MaybeArchived::Archived(kv.value())
-                }
-            })
-        })
-    }
-
-    fn get_mut(&mut self, _key: &K) -> Option<MappedBranchMut<Self, A, S, V>> {
-        todo!()
-    }
-}
-
-impl<C, K, V, A, S> Lookup<C, K, V, A, S> for Stored<C, S>
-where
-    K: Archive<Archived = K>,
-    V: Archive,
-    C: Compound<A, S, Leaf = KvPair<K, V>>,
-    S: Store,
-{
-    fn get(&self, _key: &K) -> Option<MappedBranch<C, A, S, MaybeArchived<V>>> {
-        todo!()
-    }
-
-    fn get_mut(&mut self, _key: &K) -> Option<MappedBranchMut<C, A, S, V>> {
-        todo!()
     }
 }
 
@@ -244,13 +188,6 @@ pub struct PathWalker {
 impl PathWalker {
     fn new(digest: u64) -> Self {
         PathWalker { digest, depth: 0 }
-    }
-
-    fn from_key<K: Hash>(key: &K) -> Self {
-        PathWalker {
-            digest: hash(key),
-            depth: 0,
-        }
     }
 }
 
@@ -392,5 +329,68 @@ where
                 result
             }
         }
+    }
+
+    pub fn get_mut(
+        &mut self,
+        key: &K,
+    ) -> Option<MappedBranchMut<Self, A, S, V>> {
+        self.walk_mut(PathWalker::new(hash(key)))
+            .map(|branch| branch.map_leaf(|kv| kv.value_mut()))
+    }
+}
+
+/// Trait for looking up values in the map
+pub trait Lookup<C, K, V, A, S>
+where
+    S: Store,
+    C: Compound<A, S>,
+    V: Archive,
+{
+    fn get(&self, key: &K) -> Option<MappedBranch<C, A, S, MaybeArchived<V>>>;
+}
+
+impl<K, V, A, S> Lookup<Self, K, V, A, S> for Hamt<K, V, A, S>
+where
+    S: Store,
+    K: Archive + Hash,
+    V: Archive,
+    A: Annotation<KvPair<K, V>>,
+{
+    fn get(
+        &self,
+        key: &K,
+    ) -> Option<MappedBranch<Self, A, S, MaybeArchived<V>>> {
+        self.walk(PathWalker::new(hash(key))).map(|branch| {
+            branch.map_leaf(|kv| match kv {
+                MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
+                MaybeArchived::Archived(kv) => {
+                    MaybeArchived::Archived(kv.value())
+                }
+            })
+        })
+    }
+}
+
+impl<K, V, A, S> Lookup<Hamt<K, V, A, S>, K, V, A, S>
+    for Stored<Hamt<K, V, A, S>, S>
+where
+    K: Archive + Hash,
+    V: Archive,
+    A: Annotation<KvPair<K, V>>,
+    S: Store,
+{
+    fn get(
+        &self,
+        key: &K,
+    ) -> Option<MappedBranch<Hamt<K, V, A, S>, A, S, MaybeArchived<V>>> {
+        self.walk(PathWalker::new(hash(key))).map(|branch| {
+            branch.map_leaf(|kv| match kv {
+                MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
+                MaybeArchived::Archived(kv) => {
+                    MaybeArchived::Archived(kv.value())
+                }
+            })
+        })
     }
 }

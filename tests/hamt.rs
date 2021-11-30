@@ -68,7 +68,7 @@ fn insert_get_immut() {
     }
 
     for i in 0..n {
-        assert_eq!(*hamt.get(&i.into()).expect("Some(_)").leaf(), i);
+        assert_eq!(hamt.get(&i.into()).expect("Some(_)").leaf(), i);
     }
 }
 
@@ -112,7 +112,7 @@ fn insert_get_mut() {
     }
 
     for i in 0..n {
-        assert_eq!(*hamt.get(&i.into()).expect("Some(_)").leaf(), i + 1);
+        assert_eq!(hamt.get(&i.into()).expect("Some(_)").leaf(), i + 1);
     }
 }
 

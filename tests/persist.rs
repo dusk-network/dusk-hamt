@@ -5,7 +5,7 @@
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
 use dusk_hamt::{Hamt, Lookup};
-use microkelvin::{BranchRef, HostStore, Store};
+use microkelvin::{HostStore, Store};
 use rkyv::rend::LittleEndian;
 
 #[test]
@@ -28,7 +28,7 @@ fn persist_across_threads() {
     std::thread::spawn(move || {
         for i in 0..n {
             let le: LittleEndian<u64> = i.into();
-            assert_eq!(*stored.get(&le).unwrap().leaf(), i + 1);
+            assert_eq!(stored.get(&le).unwrap().leaf(), i + 1);
         }
     })
     .join()
