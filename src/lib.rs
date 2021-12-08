@@ -362,7 +362,7 @@ where
         key: &K,
     ) -> Option<MappedBranch<Self, A, S, MaybeArchived<V>>> {
         self.walk(PathWalker::new(hash(key))).map(|branch| {
-            branch.map_leaf(|kv| match kv {
+            branch.map_leaf::<MaybeArchived<V>>(|kv| match kv {
                 MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
                 MaybeArchived::Archived(kv) => {
                     MaybeArchived::Archived(kv.value())
