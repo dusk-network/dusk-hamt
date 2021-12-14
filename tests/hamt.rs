@@ -4,20 +4,22 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
-use dusk_hamt::Hamt;
+use dusk_hamt::{Hamt, Lookup};
 use microkelvin::{
-    AWrap, Annotation, Cardinality, Child, Compound, First, Keyed, Nth,
+    All, Annotation, Cardinality, Child, Compound, HostStore, Keyed,
+    MaybeArchived, Nth, Store,
 };
 use rkyv::rend::LittleEndian;
 
-fn correct_empty_state<C, A>(c: C) -> bool
+fn correct_empty_state<C, A, S>(c: C) -> bool
 where
-    C: Compound<A>,
+    S: Store,
+    C: Compound<A, S>,
     A: Annotation<C::Leaf>,
 {
     for i in 0.. {
         match c.child(i) {
-            Child::EndOfNode => return true,
+            Child::End => return true,
             Child::Empty => (),
             _ => return false,
         }
@@ -27,13 +29,13 @@ where
 
 #[test]
 fn trivial() {
-    let mut hamt = Hamt::<LittleEndian<u32>, u32, ()>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, u32, (), HostStore>::new();
     assert_eq!(hamt.remove(&0.into()), None);
 }
 
 #[test]
 fn replace() {
-    let mut hamt = Hamt::<LittleEndian<u32>, u32, ()>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, u32, (), HostStore>::new();
     assert_eq!(hamt.insert(0.into(), 38), None);
     assert_eq!(hamt.insert(0.into(), 0), Some(38));
 }
@@ -42,7 +44,7 @@ fn replace() {
 fn multiple() {
     let n: u32 = 1024;
 
-    let mut hamt = Hamt::<LittleEndian<u32>, _, ()>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, _, (), HostStore>::new();
 
     for i in 0..n {
         hamt.insert(i.into(), i);
@@ -59,7 +61,7 @@ fn multiple() {
 fn insert_get_immut() {
     let n: u32 = 1024;
 
-    let mut hamt = Hamt::<LittleEndian<u32>, _, ()>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, _, (), HostStore>::new();
 
     for i in 0..n {
         hamt.insert(i.into(), i);
@@ -74,7 +76,8 @@ fn insert_get_immut() {
 fn nth() {
     let n: u64 = 1024;
 
-    let mut hamt = Hamt::<LittleEndian<u64>, u64, Cardinality>::new();
+    let mut hamt =
+        Hamt::<LittleEndian<u64>, u64, Cardinality, HostStore>::new();
 
     let mut result: Vec<LittleEndian<u64>> = vec![];
     let mut sorted = vec![];
@@ -98,14 +101,14 @@ fn nth() {
 fn insert_get_mut() {
     let n = 1024;
 
-    let mut hamt = Hamt::<LittleEndian<u32>, _, ()>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, _, (), HostStore>::new();
 
     for i in 0..n {
         hamt.insert(i.into(), i);
     }
 
     for i in 0..n {
-        *hamt.get_mut(&i.into()).expect("Some(_)") += 1;
+        *hamt.get_mut(&i.into()).expect("Some(_)").leaf_mut() += 1;
     }
 
     for i in 0..n {
@@ -119,8 +122,12 @@ fn iterate() {
 
     use microkelvin::{Cardinality, Nth};
 
-    let mut hamt =
-        Hamt::<LittleEndian<u64>, LittleEndian<u64>, Cardinality>::new();
+    let mut hamt = Hamt::<
+        LittleEndian<u64>,
+        LittleEndian<u64>,
+        Cardinality,
+        HostStore,
+    >::new();
 
     let mut reference = vec![];
     let mut gotten: Vec<u64> = vec![];
@@ -138,14 +145,14 @@ fn iterate() {
     }
 
     for i in 0..n {
-        if let AWrap::Memory(kv) = hamt.walk(Nth(i)).unwrap().leaf() {
+        if let MaybeArchived::Memory(kv) = hamt.walk(Nth(i)).unwrap().leaf() {
             let v = kv.value();
 
             from_nth.push(v.into());
         }
     }
 
-    let branch = hamt.walk(First).expect("Some(_)");
+    let branch = hamt.walk(All).expect("Some(_)");
 
     for leaf in branch {
         let val = leaf.key();
