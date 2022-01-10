@@ -7,14 +7,13 @@
 use dusk_hamt::{Hamt, Lookup};
 use microkelvin::{
     All, Annotation, Cardinality, Child, Compound, HostStore, Keyed,
-    MaybeArchived, Nth, Store,
+    MaybeArchived, Nth, OffsetLen, Store,
 };
 use rkyv::rend::LittleEndian;
 
-fn correct_empty_state<C, A, S>(c: C) -> bool
+fn correct_empty_state<C, A, I>(c: C) -> bool
 where
-    S: Store,
-    C: Compound<A, S>,
+    C: Compound<A, I>,
     A: Annotation<C::Leaf>,
 {
     for i in 0.. {
@@ -29,13 +28,13 @@ where
 
 #[test]
 fn trivial() {
-    let mut hamt = Hamt::<LittleEndian<u32>, u32, (), HostStore>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, u32, (), OffsetLen>::new();
     assert_eq!(hamt.remove(&0.into()), None);
 }
 
 #[test]
 fn replace() {
-    let mut hamt = Hamt::<LittleEndian<u32>, u32, (), HostStore>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, u32, (), OffsetLen>::new();
     assert_eq!(hamt.insert(0.into(), 38), None);
     assert_eq!(hamt.insert(0.into(), 0), Some(38));
 }
@@ -44,7 +43,7 @@ fn replace() {
 fn multiple() {
     let n: u32 = 1024;
 
-    let mut hamt = Hamt::<LittleEndian<u32>, _, (), HostStore>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, _, (), OffsetLen>::new();
 
     for i in 0..n {
         hamt.insert(i.into(), i);
@@ -61,7 +60,7 @@ fn multiple() {
 fn insert_get_immut() {
     let n: u32 = 1024;
 
-    let mut hamt = Hamt::<LittleEndian<u32>, _, (), HostStore>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, _, (), OffsetLen>::new();
 
     for i in 0..n {
         hamt.insert(i.into(), i);
@@ -77,7 +76,7 @@ fn nth() {
     let n: u64 = 1024;
 
     let mut hamt =
-        Hamt::<LittleEndian<u64>, u64, Cardinality, HostStore>::new();
+        Hamt::<LittleEndian<u64>, u64, Cardinality, OffsetLen>::new();
 
     let mut result: Vec<LittleEndian<u64>> = vec![];
     let mut sorted = vec![];
@@ -101,7 +100,7 @@ fn nth() {
 fn insert_get_mut() {
     let n = 1024;
 
-    let mut hamt = Hamt::<LittleEndian<u32>, _, (), HostStore>::new();
+    let mut hamt = Hamt::<LittleEndian<u32>, _, (), OffsetLen>::new();
 
     for i in 0..n {
         hamt.insert(i.into(), i);
@@ -126,7 +125,7 @@ fn iterate() {
         LittleEndian<u64>,
         LittleEndian<u64>,
         Cardinality,
-        HostStore,
+        OffsetLen,
     >::new();
 
     let mut reference = vec![];

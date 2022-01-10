@@ -5,14 +5,14 @@
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
 use dusk_hamt::{Hamt, Lookup};
-use microkelvin::{HostStore, Store};
+use microkelvin::{HostStore, StoreRef};
 use rkyv::rend::LittleEndian;
 
 #[test]
 fn persist_across_threads() {
     let n: u64 = 1024;
 
-    let store = HostStore::new();
+    let store = StoreRef::new(HostStore::new());
 
     let mut hamt = Hamt::<LittleEndian<u64>, u64, (), _>::new();
 
@@ -21,7 +21,7 @@ fn persist_across_threads() {
         hamt.insert(le, i + 1);
     }
 
-    let stored = store.put(&hamt);
+    let stored = store.store(&hamt);
 
     // it should now be available from other threads
 

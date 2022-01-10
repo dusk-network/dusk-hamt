@@ -7,19 +7,22 @@
 #![no_std]
 
 //! Hamt
-use core::borrow::Borrow;
+use core::borrow::BorrowMut;
 use core::hash::{Hash, Hasher};
 use core::mem;
 
+use bytecheck::CheckBytes;
 use microkelvin::{
     Annotation, ArchivedChild, ArchivedCompound, Child, ChildMut, Compound,
     Discriminant, Keyed, Link, MappedBranch, MappedBranchMut, MaybeArchived,
-    Step, Store, Stored, Walkable, Walker,
+    Step, StoreProvider, StoreRef, StoreSerializer, Stored, Walkable, Walker,
 };
+use rkyv::validation::validators::DefaultValidator;
 use rkyv::{Archive, Deserialize, Serialize};
 use seahash::SeaHasher;
 
 #[derive(Clone, Debug, Archive, Serialize, Deserialize)]
+#[archive_attr(derive(CheckBytes))]
 pub struct KvPair<K, V> {
     key: K,
     val: V,
@@ -62,41 +65,38 @@ where
 }
 
 #[derive(Clone, Serialize, Archive, Deserialize)]
+#[archive_attr(derive(CheckBytes))]
 #[archive(bound(serialize = "
-  A: Archive + Clone + Annotation<KvPair<K, V>>,
-  K: Archive,
-  V: Archive,
-  S: Store<Storage = __S>,"))]
+  K: Archive + Serialize<StoreSerializer<I>>,
+  V: Archive + Serialize<StoreSerializer<I>>,
+  A: Clone + Annotation<KvPair<K, V>>,
+  I: Clone,
+  __S: Sized + BorrowMut<StoreSerializer<I>>"))]
 #[archive(bound(deserialize = "
   KvPair<K, V>: Archive + Clone,
-  <KvPair<K, V> as Archive>::Archived: Deserialize<KvPair<K, V>, S>,
+  <KvPair<K, V> as Archive>::Archived: Deserialize<KvPair<K, V>, StoreRef<I>>,
   A: Clone + Annotation<KvPair<K, V>>,
-  for<'a> &'a mut __D: Borrow<S>,
-  __D: Store,"))]
-pub enum Bucket<K, V, A, S>
-where
-    S: Store,
-{
+  I: Clone,
+  __D: StoreProvider<I>,"))]
+pub enum Bucket<K, V, A, I> {
     Empty,
     Leaf(KvPair<K, V>),
-    Node(#[omit_bounds] Link<Hamt<K, V, A, S>, A, S>),
+    Node(#[omit_bounds] Link<Hamt<K, V, A, I>, A, I>),
 }
 
 #[derive(Clone, Archive, Serialize, Deserialize)]
-pub struct Hamt<K, V, A, S>([Bucket<K, V, A, S>; 4])
-where
-    S: Store;
+#[archive_attr(derive(CheckBytes))]
+pub struct Hamt<K, V, A, I>([Bucket<K, V, A, I>; 4]);
 
-impl<K, V, A, S> Compound<A, S> for Hamt<K, V, A, S>
+impl<K, V, A, I> Compound<A, I> for Hamt<K, V, A, I>
 where
-    S: Store,
     K: Archive,
     V: Archive,
     A: Annotation<KvPair<K, V>>,
 {
     type Leaf = KvPair<K, V>;
 
-    fn child(&self, ofs: usize) -> Child<Self, A, S> {
+    fn child(&self, ofs: usize) -> Child<Self, A, I> {
         match self.0.get(ofs) {
             Some(Bucket::Empty) => Child::Empty,
             Some(Bucket::Leaf(ref kv)) => Child::Leaf(kv),
@@ -105,7 +105,7 @@ where
         }
     }
 
-    fn child_mut(&mut self, ofs: usize) -> ChildMut<Self, A, S> {
+    fn child_mut(&mut self, ofs: usize) -> ChildMut<Self, A, I> {
         match self.0.get_mut(ofs) {
             Some(Bucket::Empty) => ChildMut::Empty,
             Some(Bucket::Leaf(ref mut kv)) => ChildMut::Leaf(kv),
@@ -115,15 +115,14 @@ where
     }
 }
 
-impl<K, V, A, S> ArchivedCompound<Hamt<K, V, A, S>, A, S>
-    for ArchivedHamt<K, V, A, S>
+impl<K, V, A, I> ArchivedCompound<Hamt<K, V, A, I>, A, I>
+    for ArchivedHamt<K, V, A, I>
 where
     K: Archive,
     V: Archive,
     A: Annotation<KvPair<K, V>>,
-    S: Store,
 {
-    fn child(&self, ofs: usize) -> ArchivedChild<Hamt<K, V, A, S>, A, S> {
+    fn child(&self, ofs: usize) -> ArchivedChild<Hamt<K, V, A, I>, A, I> {
         match self.0.get(ofs) {
             Some(ArchivedBucket::Leaf(l)) => ArchivedChild::Leaf(l),
             Some(ArchivedBucket::Node(n)) => ArchivedChild::Link(n),
@@ -133,30 +132,27 @@ where
     }
 }
 
-impl<K, V, A, S> Bucket<K, V, A, S>
+impl<K, V, A, I> Bucket<K, V, A, I>
 where
     A: Annotation<KvPair<K, V>>,
-    S: Store,
 {
     fn take(&mut self) -> Self {
         mem::replace(self, Bucket::Empty)
     }
 }
 
-impl<K, V, A, S> Default for Bucket<K, V, A, S>
+impl<K, V, A, I> Default for Bucket<K, V, A, I>
 where
     A: Annotation<KvPair<K, V>>,
-    S: Store,
 {
     fn default() -> Self {
         Bucket::Empty
     }
 }
 
-impl<K, V, A, S> Default for Hamt<K, V, A, S>
+impl<K, V, A, I> Default for Hamt<K, V, A, I>
 where
     A: Annotation<KvPair<K, V>>,
-    S: Store,
 {
     fn default() -> Self {
         Hamt(Default::default())
@@ -191,15 +187,14 @@ impl PathWalker {
     }
 }
 
-impl<'a, C, A, S> Walker<C, A, S> for PathWalker
+impl<'a, C, A, I> Walker<C, A, I> for PathWalker
 where
-    C: Compound<A, S> + Archive,
-    C::Archived: ArchivedCompound<C, A, S>,
+    C: Compound<A, I> + Archive,
+    C::Archived: ArchivedCompound<C, A, I>,
     C::Leaf: Archive,
     A: Annotation<C::Leaf>,
-    S: Store,
 {
-    fn walk(&mut self, level: impl Walkable<C, A, S>) -> Step {
+    fn walk(&mut self, level: impl Walkable<C, A, I>) -> Step {
         let slot = slot(self.digest, self.depth);
         self.depth += 1;
         match level.probe(slot) {
@@ -211,15 +206,21 @@ where
     }
 }
 
-impl<K, V, A, S> Hamt<K, V, A, S>
+impl<K, V, A, I> Hamt<K, V, A, I>
 where
-    K: Archive<Archived = K> + Clone + Eq + Hash,
+    K: Archive<Archived = K>
+        + Clone
+        + Eq
+        + Hash
+        + for<'a> CheckBytes<DefaultValidator<'a>>,
     V: Archive + Clone,
+    V::Archived: for<'a> CheckBytes<DefaultValidator<'a>>,
     A: Annotation<KvPair<K, V>>,
     Self: Archive,
-    <Hamt<K, V, A, S> as Archive>::Archived:
-        ArchivedCompound<Self, A, S> + Deserialize<Self, S>,
-    S: Store,
+    <Hamt<K, V, A, I> as Archive>::Archived: ArchivedCompound<Self, A, I>
+        + Deserialize<Self, StoreRef<I>>
+        + for<'a> CheckBytes<DefaultValidator<'a>>,
+    I: Clone + for<'any> CheckBytes<DefaultValidator<'any>>,
 {
     /// Creates a new empty Hamt
     pub fn new() -> Self {
@@ -334,33 +335,35 @@ where
     pub fn get_mut(
         &mut self,
         key: &K,
-    ) -> Option<MappedBranchMut<Self, A, S, V>> {
+    ) -> Option<MappedBranchMut<Self, A, I, V>> {
         self.walk_mut(PathWalker::new(hash(key)))
             .map(|branch| branch.map_leaf(|kv| kv.value_mut()))
     }
 }
 
 /// Trait for looking up values in the map
-pub trait Lookup<C, K, V, A, S>
+pub trait Lookup<C, K, V, A, I>
 where
-    S: Store,
-    C: Compound<A, S>,
+    C: Compound<A, I>,
     V: Archive,
 {
-    fn get(&self, key: &K) -> Option<MappedBranch<C, A, S, MaybeArchived<V>>>;
+    fn get(&self, key: &K) -> Option<MappedBranch<C, A, I, MaybeArchived<V>>>;
 }
 
-impl<K, V, A, S> Lookup<Self, K, V, A, S> for Hamt<K, V, A, S>
+impl<K, V, A, I> Lookup<Self, K, V, A, I> for Hamt<K, V, A, I>
 where
-    S: Store,
     K: Archive + Hash,
+    K::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     V: Archive,
+    V::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     A: Annotation<KvPair<K, V>>,
+    A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
+    I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
 {
     fn get(
         &self,
         key: &K,
-    ) -> Option<MappedBranch<Self, A, S, MaybeArchived<V>>> {
+    ) -> Option<MappedBranch<Self, A, I, MaybeArchived<V>>> {
         self.walk(PathWalker::new(hash(key))).map(|branch| {
             branch.map_leaf::<MaybeArchived<V>>(|kv| match kv {
                 MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
@@ -372,18 +375,21 @@ where
     }
 }
 
-impl<K, V, A, S> Lookup<Hamt<K, V, A, S>, K, V, A, S>
-    for Stored<Hamt<K, V, A, S>, S>
+impl<K, V, A, I> Lookup<Hamt<K, V, A, I>, K, V, A, I>
+    for Stored<Hamt<K, V, A, I>, I>
 where
-    K: Archive + Hash,
-    V: Archive,
+    K: 'static + Archive + Hash,
+    K::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
+    V: 'static + Archive,
+    V::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     A: Annotation<KvPair<K, V>>,
-    S: Store,
+    A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
+    I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
 {
     fn get(
         &self,
         key: &K,
-    ) -> Option<MappedBranch<Hamt<K, V, A, S>, A, S, MaybeArchived<V>>> {
+    ) -> Option<MappedBranch<Hamt<K, V, A, I>, A, I, MaybeArchived<V>>> {
         self.walk(PathWalker::new(hash(key))).map(|branch| {
             branch.map_leaf(|kv| match kv {
                 MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
