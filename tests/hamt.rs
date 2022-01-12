@@ -6,8 +6,8 @@
 
 use dusk_hamt::{Hamt, Lookup};
 use microkelvin::{
-    All, Annotation, Cardinality, Child, Compound, HostStore, Keyed,
-    MaybeArchived, Nth, OffsetLen, Store,
+    All, Annotation, Cardinality, Child, Compound, Keyed, MaybeArchived, Nth,
+    OffsetLen,
 };
 use rkyv::rend::LittleEndian;
 
