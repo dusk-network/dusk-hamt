@@ -194,7 +194,7 @@ where
             }
             Bucket::Node(mut node) => {
                 let result =
-                    node.compound_mut()?._insert(key, val, hash, depth + 1);
+                    node.inner_mut()?._insert(key, val, hash, depth + 1);
                 // since we moved the bucket with `take()`, we need to put it back.
                 *bucket = Bucket::Node(node);
                 result
@@ -249,7 +249,7 @@ where
             }
 
             Bucket::Node(mut link) => {
-                let mut node = link.compound_mut()?;
+                let mut node = link.inner_mut()?;
                 let result = node._remove(key, hash, depth + 1);
                 // since we moved the bucket with `take()`, we need to put it back.
                 if let Some((key, val)) = node.collapse() {
