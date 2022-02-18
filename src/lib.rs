@@ -4,7 +4,7 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
-#![no_std]
+// #![no_std]
 
 //! Hamt
 use core::mem;
@@ -18,10 +18,37 @@ use microkelvin::{
     GenericTree, Link, Step, Walker,
 };
 
-#[derive(Clone, Canon, Debug)]
+#[derive(Clone, Debug)]
 pub struct KvPair<K, V> {
     pub key: K,
     pub val: V,
+}
+
+impl<K, V> Canon for KvPair<K, V>
+where
+    K: Canon,
+    V: Canon,
+{
+    fn encode(&self, sink: &mut canonical::Sink) {
+        self.key.encode(sink);
+        self.val.encode(sink);
+    }
+
+    fn decode(source: &mut canonical::Source) -> Result<Self, CanonError> {
+        Ok(KvPair {
+            key: K::decode(source)?,
+            val: V::decode(source)?,
+        })
+    }
+
+    fn encoded_len(&self) -> usize {
+        println!("commputing key length");
+        let a = self.key.encoded_len();
+        println!("commputing val length");
+        let b = self.val.encoded_len();
+        println!("ok");
+        a + b
+    }
 }
 
 #[derive(Clone, Canon, Debug)]
