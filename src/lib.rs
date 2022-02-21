@@ -4,7 +4,7 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
-// #![no_std]
+#![no_std]
 
 //! Hamt
 use core::mem;
