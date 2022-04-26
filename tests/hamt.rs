@@ -10,6 +10,8 @@ use microkelvin::{
     OffsetLen,
 };
 use rkyv::rend::LittleEndian;
+use rkyv::{Archive, Serialize, Deserialize};
+use bytecheck::CheckBytes;
 
 fn correct_empty_state<C, A, I>(c: C) -> bool
 where
@@ -167,4 +169,116 @@ fn iterate() {
     assert_eq!(reference, from_iter);
     assert_eq!(from_iter, gotten);
     assert_eq!(gotten, from_nth);
+}
+
+#[test]
+fn proper_map_behavior() {
+    #[derive(
+        Copy,
+        Clone,
+        Archive,
+        Default,
+        Debug,
+        Deserialize,
+        Serialize,
+        Hash,
+        PartialEq,
+        Eq,
+        CheckBytes,
+    )]
+    #[archive(as = "Self")]
+    pub struct SecretHash([u8; 32]);
+
+    impl SecretHash {
+        pub fn new(secret_data: [u8; 32]) -> Self {
+            Self(secret_data)
+        }
+    }
+
+    let mut secrets: Hamt<SecretHash, u32, (), OffsetLen> = Hamt::new();
+    for i in 0 .. 10 {
+        let secret_data: [u8; 32] = [(i % 256) as u8; 32];
+        let secret_hash = SecretHash::new(secret_data);
+        if let Some(mut branch) = secrets.get_mut(&secret_hash) {
+            *branch.leaf_mut() += 1;
+        } else {
+            secrets.insert(secret_hash.clone(), 1);
+        }
+    }
+
+    for i in 0 .. 10 {
+        let secret_data: [u8; 32] = [(i % 256) as u8; 32];
+        let secret_hash = SecretHash::new(secret_data);
+        let x = secrets.get(&secret_hash)
+            .as_ref()
+            .map(|branch| match branch.leaf() {
+                MaybeArchived::Memory(m) => *m,
+                MaybeArchived::Archived(a) => (*a).into(),
+            })
+            .unwrap_or(0);
+        println!("i={} x={:?}", i, x);
+        assert_eq!(x, 1u32);
+    }
+
+}
+
+#[test]
+fn proper_map_behavior2() {
+    #[derive(
+    Copy,
+    Clone,
+    Archive,
+    Default,
+    Debug,
+    Deserialize,
+    Serialize,
+    Hash,
+    PartialEq,
+    Eq,
+    CheckBytes,
+    )]
+    #[archive(as = "Self")]
+    pub struct SecretHash(LittleEndian<u64>);
+
+    impl SecretHash {
+        pub fn new(secret_data: LittleEndian<u64>) -> Self {
+            Self(secret_data)
+        }
+    }
+
+    let mut secrets: Hamt<SecretHash, LittleEndian<u32>, (), OffsetLen> = Hamt::<SecretHash, LittleEndian<u32>, (), OffsetLen>::new();
+    for i in 0 .. 10 {
+        let secret_hash = SecretHash::new(i.into());
+        if let Some(mut branch) = secrets.get_mut(&secret_hash) {
+            println!("failing, as {:?} is not there yet", secret_hash);
+            assert!(false);
+        } else {
+            println!("inserting {:?}", secret_hash);
+            secrets.insert(secret_hash.clone(), 1.into());
+        }
+    }
+
+    for i in 0 .. 10 {
+        let secret_hash = SecretHash::new(i.into());
+        let x = secrets.get(&secret_hash).expect("value present").leaf().value();
+        println!("ii={} xx={:?}", i, u32::from(x));
+        assert_eq!(x, 1u32);
+    }
+
+}
+
+#[test]
+fn proper_map_behavior3() {
+    let mut secrets: Hamt<LittleEndian<u64>, LittleEndian<u32>, (), OffsetLen> = Hamt::<LittleEndian<u64>, LittleEndian<u32>, (), OffsetLen>::new();
+    for i in 0 .. 4 {
+        let key = i.into();
+        if let Some(mut branch) = secrets.get_mut(&key) {
+            println!("failing, as {} is not there yet", key.value());
+            assert!(false);
+        } else {
+            println!("inserting {}", key.value());
+            secrets.insert(key.clone(), 1.into());
+            assert!(true);
+        }
+    }
 }

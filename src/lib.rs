@@ -336,8 +336,21 @@ where
         &mut self,
         key: &K,
     ) -> Option<MappedBranchMut<Self, A, I, V>> {
-        self.walk_mut(PathWalker::new(hash(key)))
-            .map(|branch| branch.map_leaf(|kv| kv.value_mut()))
+        let mut walk_result = self.walk_mut(PathWalker::new(hash(key)));
+        let filter_result = match &mut walk_result {
+            Some(b) =>
+                if hash(&b.leaf_mut().key) == hash(key) {
+                    Some(b)
+                } else {
+                    None
+                },
+            None => None,
+        };
+        if filter_result.is_none() {
+            None
+        } else {
+            walk_result.map(|branch| branch.map_leaf(|kv| kv.value_mut()))
+        }
     }
 }
 
@@ -359,12 +372,17 @@ where
     A: Annotation<KvPair<K, V>>,
     A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
+    <K as Archive>::Archived: Hash
 {
     fn get(
         &self,
         key: &K,
     ) -> Option<MappedBranch<Self, A, I, MaybeArchived<V>>> {
-        self.walk(PathWalker::new(hash(key))).map(|branch| {
+        self.walk(PathWalker::new(hash(key))).
+            filter(|b|match b.leaf() {
+                MaybeArchived::Memory(kv) => hash(kv.key()) == hash(key),
+                MaybeArchived::Archived(kv) => hash(&kv.key) == hash(key),
+            }).map(|branch| {
             branch.map_leaf::<MaybeArchived<V>>(|kv| match kv {
                 MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
                 MaybeArchived::Archived(kv) => {
@@ -385,12 +403,17 @@ where
     A: Annotation<KvPair<K, V>>,
     A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
+    <K as Archive>::Archived: Hash
 {
     fn get(
         &self,
         key: &K,
     ) -> Option<MappedBranch<Hamt<K, V, A, I>, A, I, MaybeArchived<V>>> {
-        self.walk(PathWalker::new(hash(key))).map(|branch| {
+        self.walk(PathWalker::new(hash(key))).
+            filter(|b|match b.leaf() {
+                MaybeArchived::Memory(kv) => hash(kv.key()) == hash(key),
+                MaybeArchived::Archived(kv) => hash(&kv.key) == hash(key),
+            }).map(|branch| {
             branch.map_leaf(|kv| match kv {
                 MaybeArchived::Memory(kv) => MaybeArchived::Memory(kv.value()),
                 MaybeArchived::Archived(kv) => {
