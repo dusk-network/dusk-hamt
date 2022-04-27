@@ -360,7 +360,6 @@ where
     A: Annotation<KvPair<K, V>>,
     A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
-    <K as Archive>::Archived: Hash,
     K: Eq,
     K: Archive<Archived = K>,
 {
@@ -396,7 +395,6 @@ where
     A: Annotation<KvPair<K, V>>,
     A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
-    <K as Archive>::Archived: Hash,
     K: Eq,
     K: Archive<Archived = K>,
 {
