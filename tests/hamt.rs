@@ -4,14 +4,14 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
+use bytecheck::CheckBytes;
 use dusk_hamt::{Hamt, Lookup};
 use microkelvin::{
     All, Annotation, Cardinality, Child, Compound, Keyed, MaybeArchived, Nth,
     OffsetLen,
 };
 use rkyv::rend::LittleEndian;
-use rkyv::{Archive, Serialize, Deserialize};
-use bytecheck::CheckBytes;
+use rkyv::{Archive, Deserialize, Serialize};
 
 fn correct_empty_state<C, A, I>(c: C) -> bool
 where
@@ -199,7 +199,7 @@ fn map_behavior_with_struct_key() {
     assert_eq!(TEST_SIZE % 256, 0);
 
     let mut secrets: Hamt<SecretHash, u32, (), OffsetLen> = Hamt::new();
-    for i in 0 .. TEST_SIZE {
+    for i in 0..TEST_SIZE {
         let secret_data: [u8; 32] = [(i % 256) as u8; 32];
         let secret_hash = SecretHash::new(secret_data);
         if let Some(mut branch) = secrets.get_mut(&secret_hash) {
@@ -209,26 +209,27 @@ fn map_behavior_with_struct_key() {
         }
     }
 
-    for i in 0 .. TEST_SIZE {
+    for i in 0..TEST_SIZE {
         let secret_data: [u8; 32] = [(i % 256) as u8; 32];
         let secret_hash = SecretHash::new(secret_data);
-        let value = secrets.get(&secret_hash)
+        let value = secrets
+            .get(&secret_hash)
             .as_ref()
             .map(|branch| match branch.leaf() {
                 MaybeArchived::Memory(m) => *m,
                 MaybeArchived::Archived(a) => (*a).into(),
             })
             .unwrap_or(0);
-        assert_eq!(value, TEST_SIZE/256);
+        assert_eq!(value, TEST_SIZE / 256);
     }
-
 }
 
 #[test]
 fn map_behavior_with_simple_key() {
-    let mut secrets: Hamt<LittleEndian<u64>, LittleEndian<u32>, (), OffsetLen> = Hamt::<LittleEndian<u64>, LittleEndian<u32>, (), OffsetLen>::new();
+    let mut secrets: Hamt<LittleEndian<u64>, LittleEndian<u32>, (), OffsetLen> =
+        Hamt::<LittleEndian<u64>, LittleEndian<u32>, (), OffsetLen>::new();
     const TEST_SIZE: u64 = 4 * 256;
-    for i in 0 .. TEST_SIZE {
+    for i in 0..TEST_SIZE {
         let key = i.into();
         if let Some(mut _branch) = secrets.get_mut(&key) {
             assert!(false);
