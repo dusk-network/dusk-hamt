@@ -337,7 +337,7 @@ where
         key: &K,
     ) -> Option<MappedBranchMut<Self, A, I, V>> {
         self.walk_mut(PathWalker::new(hash(key)))
-            .and_then(|mut b| (hash(&b.leaf_mut().key) == hash(key)).then(|| b))
+            .and_then(|mut b| (b.leaf_mut().key == *key).then(|| b))
             .and_then(|branch| Some(branch.map_leaf(|kv| kv.value_mut())))
     }
 }
@@ -361,6 +361,7 @@ where
     A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
     <K as Archive>::Archived: Hash,
+    K: PartialEq,
 {
     fn get(
         &self,
@@ -368,7 +369,7 @@ where
     ) -> Option<MappedBranch<Self, A, I, MaybeArchived<V>>> {
         self.walk(PathWalker::new(hash(key)))
             .filter(|b| match b.leaf() {
-                MaybeArchived::Memory(kv) => hash(kv.key()) == hash(key),
+                MaybeArchived::Memory(kv) => *kv.key() == *key,
                 MaybeArchived::Archived(kv) => hash(&kv.key) == hash(key),
             })
             .map(|branch| {
@@ -395,6 +396,7 @@ where
     A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
     <K as Archive>::Archived: Hash,
+    K: PartialEq,
 {
     fn get(
         &self,
@@ -402,7 +404,7 @@ where
     ) -> Option<MappedBranch<Hamt<K, V, A, I>, A, I, MaybeArchived<V>>> {
         self.walk(PathWalker::new(hash(key)))
             .filter(|b| match b.leaf() {
-                MaybeArchived::Memory(kv) => hash(kv.key()) == hash(key),
+                MaybeArchived::Memory(kv) => *kv.key() == *key,
                 MaybeArchived::Archived(kv) => hash(&kv.key) == hash(key),
             })
             .map(|branch| {
