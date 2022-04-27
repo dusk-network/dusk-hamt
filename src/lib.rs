@@ -361,7 +361,7 @@ where
     A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
     <K as Archive>::Archived: Hash,
-    K: PartialEq,
+    K: Eq,
     K: Archive<Archived = K>,
 {
     fn get(
@@ -397,7 +397,7 @@ where
     A::Archived: for<'any> CheckBytes<DefaultValidator<'any>>,
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
     <K as Archive>::Archived: Hash,
-    K: PartialEq,
+    K: Eq,
     K: Archive<Archived = K>,
 {
     fn get(
