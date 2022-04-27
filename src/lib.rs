@@ -362,6 +362,7 @@ where
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
     <K as Archive>::Archived: Hash,
     K: PartialEq,
+    K: Archive<Archived = K>,
 {
     fn get(
         &self,
@@ -370,7 +371,7 @@ where
         self.walk(PathWalker::new(hash(key)))
             .filter(|b| match b.leaf() {
                 MaybeArchived::Memory(kv) => *kv.key() == *key,
-                MaybeArchived::Archived(kv) => hash(&kv.key) == hash(key),
+                MaybeArchived::Archived(kv) => kv.key == *key,
             })
             .map(|branch| {
                 branch.map_leaf::<MaybeArchived<V>>(|kv| match kv {
@@ -397,6 +398,7 @@ where
     I: Archive + for<'any> CheckBytes<DefaultValidator<'any>>,
     <K as Archive>::Archived: Hash,
     K: PartialEq,
+    K: Archive<Archived = K>,
 {
     fn get(
         &self,
@@ -405,7 +407,7 @@ where
         self.walk(PathWalker::new(hash(key)))
             .filter(|b| match b.leaf() {
                 MaybeArchived::Memory(kv) => *kv.key() == *key,
-                MaybeArchived::Archived(kv) => hash(&kv.key) == hash(key),
+                MaybeArchived::Archived(kv) => kv.key == *key,
             })
             .map(|branch| {
                 branch.map_leaf(|kv| match kv {
