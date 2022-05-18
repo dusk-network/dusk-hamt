@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Update `microkelvin` from `0.13.0-rc.0` to `0.16.0-rkyv.0`
+
+### Changed
+
 - Update `microkelvin` version to `0.10.0-rc`
 - Change `persistance` by `persistence` for the feature name.
 
