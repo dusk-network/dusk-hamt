@@ -1,6 +1,6 @@
 [package]
 name = "dusk-hamt"
-version = "0.11.0-rkyv.0"
+version = "0.11.0-rkyv.1"
 authors = ["Kristoffer Ström <kristoffer@dusk.network>"]
 edition = "2018"
 description = "HAMT datatructure for microkelvin"
@@ -10,9 +10,9 @@ keywords = ["merkle", "datastructure", "hamt"]
 
 [dependencies]
 bytecheck = { version = "0.6.7", default-features = false }
-microkelvin = { version = "0.16.0-rkyv.0", default-features = false }
+microkelvin = { version = "0.16.0-rkyv", default-features = false }
 rkyv = { version = "0.7.29", default-features = false, features = ["validation"] }
 seahash= { version = "4.1.0", default-features = false } 
 
 [dev-dependencies]
-microkelvin = "0.16.0-rkyv.1"
+microkelvin = "0.16.0-rkyv"
