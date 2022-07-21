@@ -1,18 +1,20 @@
 [package]
 name = "dusk-hamt"
-version = "0.9.1"
-authors = ["Kristoffer Ström <kristoffer@dusk.network>"]
-edition = "2018"
 description = "HAMT datatructure for microkelvin"
-license = "MPL-2.0"
-repository = "https://github.com/dusk-network/dusk-hamt"
+categories = ["data-structures", "no-std"]
 keywords = ["merkle", "datastructure", "hamt"]
 
+repository = "https://github.com/dusk-network/dusk-hamt"
+authors = [
+    "Kristoffer Ström <kristoffer@dusk.network>",
+    "Eduardo Leegwater Simões <eduardo@dusk.network>"
+]
+version = "0.9.1"
+
+edition = "2021"
+license = "MPL-2.0"
+
 [dependencies]
-microkelvin = "0.14"
-canonical = "0.6"
-canonical_derive = "0.6"
-
-[features]
-persistence = ["microkelvin/persistence"]
-
+microkelvin = { git = "ssh://git@github.com/dusk-network/microkelvin", branch = "tree-only" }
+ranno = { git = "ssh://git@github.com/dusk-network/ranno", branch = "main" }
+seahash = "4.1"
