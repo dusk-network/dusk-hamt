@@ -10,6 +10,9 @@
 
 pub mod annotation;
 
+pub mod value;
+use value::{Value, ValueMut};
+
 extern crate alloc;
 use alloc::boxed::Box;
 
@@ -275,17 +278,19 @@ where
         }
     }
 
-    pub fn get(&self, key: &K) -> Option<Branch<Self, A>> {
+    pub fn get(&self, key: &K) -> Option<Value<K, V, A>> {
         let digest = hash(key);
 
         Branch::walk(self, PathWalker::new(digest))
             .filter(|branch| &branch.key == key)
+            .map(From::from)
     }
 
-    pub fn get_mut(&mut self, key: &K) -> Option<BranchMut<Self, A>> {
+    pub fn get_mut(&mut self, key: &K) -> Option<ValueMut<K, V, A>> {
         let digest = hash(key);
 
         BranchMut::walk(self, PathWalker::new(digest))
             .filter(|branch| &branch.key == key)
+            .map(From::from)
     }
 }

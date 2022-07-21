@@ -63,7 +63,7 @@ fn insert_get() {
     }
 
     for i in 0..n {
-        assert_eq!(hamt.get(&i).expect("Some(_)").val, i);
+        assert_eq!(*hamt.get(&i).expect("Some(_)"), i);
     }
 }
 
@@ -102,11 +102,11 @@ fn insert_get_mut() {
     }
 
     for i in 0..n {
-        hamt.get_mut(&i).expect("Some(_)").val += 1;
+        *hamt.get_mut(&i).expect("Some(_)") += 1;
     }
 
     for i in 0..n {
-        assert_eq!(hamt.get(&i).expect("Some(_)").val, i + 1);
+        assert_eq!(*hamt.get(&i).expect("Some(_)"), i + 1);
     }
 }
 

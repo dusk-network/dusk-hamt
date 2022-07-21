@@ -9,7 +9,7 @@ use crate::Hamt;
 
 use core::borrow::Borrow;
 
-use microkelvin::{Branch, BranchMut, Child, Step, Walk, Walker};
+use microkelvin::{Branch, Child, Step, Walk, Walker};
 use ranno::Annotation;
 
 impl<K, V, A> Hamt<K, V, A>
@@ -19,11 +19,6 @@ where
     /// Construct a [`Branch`] pointing to the `nth` element, if any
     pub fn nth(&self, index: u64) -> Option<Branch<Self, A>> {
         Branch::walk(self, Index(index))
-    }
-
-    /// Construct a [`BranchMut`] pointing to the `nth` element, if any
-    pub fn nth_mut(&mut self, index: u64) -> Option<BranchMut<Self, A>> {
-        BranchMut::walk(self, Index(index))
     }
 }
 
