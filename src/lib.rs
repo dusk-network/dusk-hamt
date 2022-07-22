@@ -39,6 +39,10 @@ enum Bucket<K, V, A> {
 }
 
 impl<K, V, A> Bucket<K, V, A> {
+    const fn new() -> Self {
+        Self::Empty
+    }
+
     fn take(&mut self) -> Self {
         mem::replace(self, Bucket::Empty)
     }
@@ -159,16 +163,18 @@ where
     }
 }
 
+impl<K, V, A> Hamt<K, V, A> {
+    /// Creates a new empty Hamt
+    pub const fn new() -> Self {
+        Self([Bucket::new(), Bucket::new(), Bucket::new(), Bucket::new()])
+    }
+}
+
 impl<K, V, A> Hamt<K, V, A>
 where
     K: Hash + Eq,
     A: Annotation<Hamt<K, V, A>>,
 {
-    /// Creates a new empty Hamt
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn insert(&mut self, key: K, val: V) -> Option<V> {
         let digest = hash(&key);
         self._insert(key, val, digest, 0)
@@ -264,7 +270,8 @@ where
                 let node = &mut *child;
 
                 let result = node._remove(key, digest, depth + 1);
-                // since we moved the bucket with `take()`, we need to put it back.
+                // since we moved the bucket with `take()`, we need to put it
+                // back.
                 if let Some(pair) = node.collapse() {
                     *bucket = Bucket::Leaf(KvPair {
                         key: pair.key,
